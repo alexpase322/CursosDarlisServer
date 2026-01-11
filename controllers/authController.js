@@ -113,7 +113,7 @@ const inviteUser = async (req, res) => {
 
     // USANDO RESEND (Nunca da timeout en Render)
     await resend.emails.send({
-      from: 'onboarding@resend.dev', // Usa este remitente de prueba si no tienes dominio propio
+      from: 'alexpase32@gmail.com', // Usa este remitente de prueba si no tienes dominio propio
       to: email,
       subject: '¡Te han invitado a unirte al equipo!',
       html: `
@@ -212,7 +212,7 @@ const forgotPassword = async (req, res) => {
         // USANDO RESEND TAMBIÉN AQUÍ
         try {
             await resend.emails.send({
-                from: 'onboarding@resend.dev',
+                from: 'alexpase32@gmail.com',
                 to: user.email,
                 subject: "Restablecer Contraseña",
                 html: `
