@@ -33,7 +33,7 @@ if (process.env.FRONTEND_URL) {
 }
 
 // Webhook de Stripe (debe ir antes del express.json)
-app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), stripeWebhook);
+app.post('/payment/webhook', express.raw({ type: 'application/json' }), stripeWebhook);
 
 // Middlewares
 app.use(express.json()); 
@@ -82,13 +82,13 @@ io.on("connection", (socket) => {
     });
 });
 
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/courses', courseRoutes);
-app.use('/api/posts', postRoutes);
-app.use('/api/chat', chatRoutes); 
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/payment', paymentRoutes);
+app.use('/auth', authRoutes);
+app.use('/users', userRoutes);
+app.use('/courses', courseRoutes);
+app.use('/posts', postRoutes);
+app.use('/chat', chatRoutes); 
+app.use('/notifications', notificationRoutes);
+app.use('/payment', paymentRoutes);
 
 app.get('/', (req, res) => {
     res.send('API de Plataforma de Cursos funcionando...');
