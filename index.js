@@ -6,48 +6,74 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const courseRoutes = require('./routes/courseRoutes');
 const postRoutes = require('./routes/post.routes')
-const chatRoutes = require('./routes/chat.routes'); // <--- NO OLVIDAR ESTA VEZ
+const chatRoutes = require('./routes/chat.routes'); 
 const notificationRoutes = require('./routes/notification.routes')
 const paymentRoutes = require('./routes/payment.routes');
-const { stripeWebhook } = require('./controllers/payment.controller'); // Importar directo el controlador para la ruta raw
-const http = require('http'); // 1. Importar HTTP
-const { Server } = require('socket.io'); // 2. Importar Socket.io
+const { stripeWebhook } = require('./controllers/payment.controller'); 
+const http = require('http'); 
+const { Server } = require('socket.io'); 
 
 // Configuración
 dotenv.config();
 connectDB();
 
 const app = express();
+
+// --- CORRECCIÓN AQUÍ: Lista de orígenes permitidos ---
+// Esto permite que funcione en tu PC y en Vercel al mismo tiempo sin cambiar variables
+const allowedOrigins = [
+    "http://localhost:5173",
+    "https://darlis-cursos-frontend.vercel.app", // Tu URL de producción (sin slash al final)
+    "https://darlis-cursos-frontend.vercel.app/" // A veces Vercel envía con slash, agregamos ambas por seguridad
+];
+
+// O si prefieres usar la variable de entorno, asegúrate de que esté en la lista:
+if (process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
+// Webhook de Stripe (debe ir antes del express.json)
 app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), stripeWebhook);
+
 // Middlewares
-app.use(express.json()); // Para leer JSON
+app.use(express.json()); 
+
+// Configuración CORS para Express (Rutas normales)
 app.use(cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: function (origin, callback) {
+        // Permitir peticiones sin origen (como Postman o Apps móviles) o si está en la lista
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            console.log("Origen bloqueado por CORS:", origin);
+            callback(new Error('No permitido por CORS'));
+        }
+    },
     credentials: true
-})); // Para permitir peticiones desde el Frontend
+}));
 
 const server = http.createServer(app);
+
+// Configuración CORS para Socket.io (Chat y Notificaciones)
 const io = new Server(server, {
     cors: {
-        origin: process.env.FRONTEND_URL || "http://localhost:5173",
-        methods: ["GET", "POST"]
+        origin: allowedOrigins, // Usamos la misma lista
+        methods: ["GET", "POST"],
+        credentials: true
     }
 })
 
 app.set('socketio', io);
+
 io.on("connection", (socket) => {
     console.log(`Usuario conectado: ${socket.id}`);
 
-    // Unirse a una sala específica (Conversation ID)
     socket.on("join_room", (conversationId) => {
         socket.join(conversationId);
         console.log(`Usuario ${socket.id} entró a la sala ${conversationId}`);
     });
 
-    // Enviar mensaje
     socket.on("send_message", (data) => {
-        // data debe tener: { conversationId, message }
-        // Reenviamos el mensaje a todos en esa sala (incluyendo al remitente para confirmar o excluyéndolo)
         socket.to(data.conversationId).emit("receive_message", data.message);
     });
 
@@ -64,14 +90,10 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/payment', paymentRoutes);
 
-
-
-// Rutas de prueba
 app.get('/', (req, res) => {
     res.send('API de Plataforma de Cursos funcionando...');
 });
 
-// Levantar servidor
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
