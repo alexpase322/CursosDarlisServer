@@ -12,12 +12,14 @@ const generateToken = (id, role) => {
 };
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: "smtp.gmail.com",
+  port: 465, // Puerto seguro SSL (funciona mejor en la nube)
+  secure: true, // true para puerto 465, false para otros
   auth: {
-    user: process.env.EMAIL_USER, // Lee del .env
-    pass: process.env.EMAIL_PASS  // Lee del .env
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   }
-})
+});
 
 // @desc    Registrar nuevo usuario
 // @route   POST /api/auth/register
