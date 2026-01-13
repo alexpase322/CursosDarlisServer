@@ -23,8 +23,10 @@ const app = express();
 // Esto permite que funcione en tu PC y en Vercel al mismo tiempo sin cambiar variables
 const allowedOrigins = [
     "http://localhost:5173",
-    "https://darlis-cursos-frontend.vercel.app", // Tu URL de producción (sin slash al final)
-    "https://darlis-cursos-frontend.vercel.app/" // A veces Vercel envía con slash, agregamos ambas por seguridad
+    "https://arquitectadetupropioexito.com/", 
+    "https://arquitectadetupropioexito.com",
+    "arquitectadetupropioexito.com",
+    "arquitectadetupropioexito.com/"
 ];
 
 // O si prefieres usar la variable de entorno, asegúrate de que esté en la lista:
