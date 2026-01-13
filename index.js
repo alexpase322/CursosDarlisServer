@@ -24,9 +24,7 @@ const app = express();
 const allowedOrigins = [
     "http://localhost:5173",
     "https://arquitectadetupropioexito.com/", 
-    "https://arquitectadetupropioexito.com",
-    "arquitectadetupropioexito.com",
-    "arquitectadetupropioexito.com/"
+    "https://arquitectadetupropioexito.com"
 ];
 
 // O si prefieres usar la variable de entorno, asegúrate de que esté en la lista:
