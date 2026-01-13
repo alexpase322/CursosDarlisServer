@@ -23,8 +23,8 @@ const app = express();
 // Esto permite que funcione en tu PC y en Vercel al mismo tiempo sin cambiar variables
 const allowedOrigins = [
     "http://localhost:5173",
-    "https://arquitectadetupropioexito.com/", 
-    "https://arquitectadetupropioexito.com"
+    "https://arquitectadetupropioexito.com",
+    "https://www.arquitectadetupropioexito.com"
 ];
 
 // O si prefieres usar la variable de entorno, asegúrate de que esté en la lista:
