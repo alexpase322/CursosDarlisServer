@@ -121,6 +121,7 @@ const inviteUser = async (req, res) => {
           <h2 style="color: #2563eb;">Bienvenido a la plataforma</h2>
           <p>Has sido invitado a unirte a nuestro Dashboard como <strong>${role || 'user'}</strong>.</p>
           <p>Para configurar tu cuenta, contraseña y foto, haz clic en el siguiente botón:</p>
+          <a href="https://chat.whatsapp.com/JAwyMpcAIY9HnQwV6xttMD" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Grupo privado</a>
           <a href="${inviteLink}" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Aceptar Invitación</a>
           <p style="margin-top: 20px; font-size: 12px; color: #666;">Si el botón no funciona, copia este enlace: ${inviteLink}</p>
         </div>
