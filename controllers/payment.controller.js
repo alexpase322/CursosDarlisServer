@@ -26,7 +26,7 @@ const createCheckoutSession = async (req, res) => {
             
             // 👇 AQUÍ CONFIGURAS LOS 15 DÍAS DE PRUEBA GRATIS
             subscription_data: {
-                trial_period_days: 15,
+                trial_period_days: 30,
             }
         };
 
