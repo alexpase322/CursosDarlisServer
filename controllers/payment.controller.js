@@ -23,6 +23,11 @@ const createCheckoutSession = async (req, res) => {
             mode: 'subscription',
             success_url: `${process.env.FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${process.env.FRONTEND_URL}/#planes`,
+            
+            // 👇 AQUÍ CONFIGURAS LOS 15 DÍAS DE PRUEBA GRATIS
+            subscription_data: {
+                trial_period_days: 15,
+            }
         };
 
         // Si tenemos ID de cliente (usuario antiguo), lo usamos. 
@@ -31,7 +36,7 @@ const createCheckoutSession = async (req, res) => {
             sessionConfig.customer = customerId;
         } else {
             // Forzar a Stripe a pedir email si no lo tenemos
-            sessionConfig.customer_email = email; // Puede ser undefined (Stripe lo pedirá en su UI)
+            sessionConfig.customer_email = email; 
         }
 
         const session = await stripe.checkout.sessions.create(sessionConfig);
@@ -44,7 +49,6 @@ const createCheckoutSession = async (req, res) => {
 };
 
 // 2. Webhook (Stripe le avisa a tu servidor que el pago pasó)
-// NOTA: Esto requiere una configuración especial en el index.js (body raw)
 const stripeWebhook = async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -68,11 +72,11 @@ const stripeWebhook = async (req, res) => {
         
         case 'invoice.payment_succeeded':
             // Aquí se renueva la suscripción automáticamente cada mes/año
+            // También se dispara cuando termina el Trial y se hace el primer cobro real
             const invoice = event.data.object;
             await handleSubscriptionRenewal(invoice);
             break;
 
-        // Puedes manejar 'customer.subscription.deleted' para quitar acceso si cancelan
         default:
             console.log(`Evento no manejado: ${event.type}`);
     }
@@ -82,7 +86,7 @@ const stripeWebhook = async (req, res) => {
 
 // Helpers para actualizar la BD
 const handleCheckoutSuccess = async (session) => {
-    const userId = session.metadata.userId;
+    const userId = session.metadata.userId; 
     const subscriptionId = session.subscription;
     
     // Obtener detalles de la suscripción para saber cuándo expira
@@ -93,11 +97,12 @@ const handleCheckoutSuccess = async (session) => {
         subscription: {
             id: subscriptionId,
             customerId: session.customer,
-            status: 'active',
-            currentPeriodEnd: new Date(subscription.current_period_end * 1000) // Stripe usa segundos, JS usa ms
+            // 👇 Guardamos el status real (será 'trialing' por 15 días y luego 'active')
+            status: subscription.status, 
+            currentPeriodEnd: new Date(subscription.current_period_end * 1000) 
         }
     });
-    console.log(`Usuario ${userId} suscrito exitosamente.`);
+    console.log(`Usuario ${userId} suscrito exitosamente. Estado: ${subscription.status}`);
 };
 
 const handleSubscriptionRenewal = async (invoice) => {
@@ -107,9 +112,10 @@ const handleSubscriptionRenewal = async (invoice) => {
     
     if(user) {
         user.subscription.currentPeriodEnd = new Date(invoice.lines.data[0].period.end * 1000);
+        // Cuando se cobra exitosamente (incluyendo cuando termina el trial), pasa a ser 'active'
         user.subscription.status = 'active';
         await user.save();
-        console.log(`Suscripción renovada para ${user.username}`);
+        console.log(`Suscripción renovada/cobrada para ${user.username}`);
     }
 };
 
