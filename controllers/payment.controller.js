@@ -23,11 +23,6 @@ const createCheckoutSession = async (req, res) => {
             mode: 'subscription',
             success_url: `${process.env.FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${process.env.FRONTEND_URL}/#planes`,
-            
-            // 👇 AQUÍ CONFIGURAS LOS 15 DÍAS DE PRUEBA GRATIS
-            subscription_data: {
-                trial_period_days: 30,
-            }
         };
 
         // Si tenemos ID de cliente (usuario antiguo), lo usamos. 
@@ -49,6 +44,7 @@ const createCheckoutSession = async (req, res) => {
 };
 
 // 2. Webhook (Stripe le avisa a tu servidor que el pago pasó)
+// NOTA: Esto requiere una configuración especial en el index.js (body raw)
 const stripeWebhook = async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -71,12 +67,12 @@ const stripeWebhook = async (req, res) => {
             break;
         
         case 'invoice.payment_succeeded':
-            // Aquí se renueva la suscripción automáticamente cada mes/año
-            // También se dispara cuando termina el Trial y se hace el primer cobro real
+            // Aquí se renueva la suscripción automáticamente cada mes/trimestre
             const invoice = event.data.object;
             await handleSubscriptionRenewal(invoice);
             break;
 
+        // Puedes manejar 'customer.subscription.deleted' para quitar acceso si cancelan
         default:
             console.log(`Evento no manejado: ${event.type}`);
     }
@@ -97,7 +93,7 @@ const handleCheckoutSuccess = async (session) => {
         subscription: {
             id: subscriptionId,
             customerId: session.customer,
-            // 👇 Guardamos el status real (será 'trialing' por 15 días y luego 'active')
+            // 👇 Guardamos el status real (al cobrar inmediatamente será 'active')
             status: subscription.status, 
             currentPeriodEnd: new Date(subscription.current_period_end * 1000) 
         }
@@ -112,7 +108,6 @@ const handleSubscriptionRenewal = async (invoice) => {
     
     if(user) {
         user.subscription.currentPeriodEnd = new Date(invoice.lines.data[0].period.end * 1000);
-        // Cuando se cobra exitosamente (incluyendo cuando termina el trial), pasa a ser 'active'
         user.subscription.status = 'active';
         await user.save();
         console.log(`Suscripción renovada/cobrada para ${user.username}`);
