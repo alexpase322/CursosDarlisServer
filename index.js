@@ -12,6 +12,7 @@ const paymentRoutes = require('./routes/payment.routes');
 const affiliateRoutes = require('./routes/affiliate.routes');
 const adminCrmRoutes = require('./routes/admin.crm.routes');
 const { stripeWebhook } = require('./controllers/payment.controller');
+const { ensureStripeWebhook } = require('./services/stripeWebhookSetup');
 const http = require('http'); 
 const { Server } = require('socket.io'); 
 
@@ -101,4 +102,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+    // Asegura que el webhook de Stripe esté registrado con todos los eventos.
+    // No bloquea el arranque si falla.
+    ensureStripeWebhook().catch(err => console.error('[stripe-webhook-setup] uncaught:', err));
 });

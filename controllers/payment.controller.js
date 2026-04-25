@@ -79,6 +79,10 @@ const stripeWebhook = async (req, res) => {
                 await handleInvoicePaymentSucceeded(event.data.object);
                 break;
 
+            case 'customer.subscription.updated':
+                await handleSubscriptionUpdated(event.data.object);
+                break;
+
             case 'customer.subscription.deleted':
                 await handleSubscriptionDeleted(event.data.object);
                 break;
@@ -142,15 +146,46 @@ const handleCheckoutSuccess = async (session) => {
 
 const handleInvoicePaymentSucceeded = async (invoice) => {
     const customerId = invoice.customer;
-    const user = await User.findOne({ 'subscription.customerId': customerId });
+    const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+
+    // Buscar usuario por (1) customerId, (2) subscriptionId, (3) email del invoice (case-insensitive).
+    let user = await User.findOne({ 'subscription.customerId': customerId });
+    if (!user && subscriptionId) {
+        user = await User.findOne({ 'subscription.id': subscriptionId });
+    }
+    if (!user) {
+        let email = (invoice.customer_email || '').toLowerCase().trim();
+        if (!email && customerId) {
+            try {
+                const c = await stripe.customers.retrieve(customerId);
+                email = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
+            } catch { /* noop */ }
+        }
+        if (email) {
+            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            user = await User.findOne({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
+        }
+    }
 
     if (user) {
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
-        if (lineItem && lineItem.period) {
-            user.subscription.currentPeriodEnd = new Date(lineItem.period.end * 1000);
-        }
-        user.subscription.status = 'active';
+        const periodEnd = lineItem && lineItem.period && lineItem.period.end
+            ? new Date(lineItem.period.end * 1000) : null;
+        const priceId = lineItem && lineItem.price && lineItem.price.id;
+        const amountUSD = invoice.amount_paid != null ? invoice.amount_paid / 100 : 0;
+        const plan = inferPlan({ priceId, lineItem, amountUSD });
+
+        user.subscription = {
+            ...(user.subscription || {}),
+            id: subscriptionId || user.subscription?.id,
+            customerId: customerId || user.subscription?.customerId,
+            status: 'active',
+            plan: plan || user.subscription?.plan,
+            currentPeriodEnd: periodEnd || user.subscription?.currentPeriodEnd
+        };
         await user.save();
+    } else {
+        console.warn(`[invoice.payment_succeeded] usuario no encontrado (customer=${customerId}, sub=${subscriptionId}, email=${invoice.customer_email})`);
     }
 
     // billing_reason puede ser 'subscription_create' (primer cobro) o 'subscription_cycle' (renovación).
@@ -225,6 +260,37 @@ const registerPaymentFromInvoice = async (invoice, user) => {
         );
     } catch (err) {
         console.error('[registerPaymentFromInvoice]', err);
+    }
+};
+
+const handleSubscriptionUpdated = async (subscription) => {
+    let user = await User.findOne({ 'subscription.id': subscription.id });
+    if (!user && subscription.customer) {
+        user = await User.findOne({ 'subscription.customerId': subscription.customer });
+    }
+    if (!user) {
+        console.warn(`[customer.subscription.updated] usuario no encontrado (sub=${subscription.id})`);
+        return;
+    }
+    const subItem = subscription.items && subscription.items.data && subscription.items.data[0];
+    const priceId = subItem?.price?.id;
+    const subAmountUSD = subItem?.price?.unit_amount != null ? subItem.price.unit_amount / 100 : null;
+    const plan = inferPlan({ priceId, lineItem: subItem, amountUSD: subAmountUSD });
+
+    user.subscription = {
+        ...(user.subscription || {}),
+        id: subscription.id,
+        customerId: subscription.customer,
+        status: subscription.status,
+        plan: plan || user.subscription?.plan,
+        currentPeriodEnd: subscription.current_period_end
+            ? new Date(subscription.current_period_end * 1000)
+            : user.subscription?.currentPeriodEnd
+    };
+    await user.save();
+
+    if (subscription.status === 'canceled' || subscription.cancel_at_period_end) {
+        // No es delete real, solo aviso de fin de ciclo. No tocamos counters todavía.
     }
 };
 
