@@ -22,11 +22,15 @@ const paymentSchema = new mongoose.Schema({
     amountUSD: { type: Number, default: 0 },
     status: {
         type: String,
-        enum: ['paid', 'refunded'],
+        enum: ['paid', 'refunded', 'failed'],
         default: 'paid'
     },
     paidAt: { type: Date, default: Date.now },
     refundedAt: { type: Date, default: null },
+    failedAt: { type: Date, default: null },
+    failureReason: { type: String, default: null },
+    attemptCount: { type: Number, default: 0 },
+    nextAttemptAt: { type: Date, default: null },
     consumedByInviteAt: { type: Date, default: null }
 }, { timestamps: true });
 

@@ -15,6 +15,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const REQUIRED_EVENTS = [
     'checkout.session.completed',
     'invoice.payment_succeeded',
+    'invoice.payment_failed',
     'customer.subscription.updated',
     'customer.subscription.deleted',
     'charge.refunded'

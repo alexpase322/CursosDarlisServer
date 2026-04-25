@@ -79,6 +79,10 @@ const stripeWebhook = async (req, res) => {
                 await handleInvoicePaymentSucceeded(event.data.object);
                 break;
 
+            case 'invoice.payment_failed':
+                await handleInvoicePaymentFailed(event.data.object);
+                break;
+
             case 'customer.subscription.updated':
                 await handleSubscriptionUpdated(event.data.object);
                 break;
@@ -260,6 +264,99 @@ const registerPaymentFromInvoice = async (invoice, user) => {
         );
     } catch (err) {
         console.error('[registerPaymentFromInvoice]', err);
+    }
+};
+
+// Registra un intento de cobro fallido. Idempotente por stripeInvoiceId:
+// si ya existe el Payment, actualiza failedAt / attemptCount / failureReason
+// y lo deja en status 'failed' (a menos que ya esté 'paid' por un reintento exitoso).
+const handleInvoicePaymentFailed = async (invoice) => {
+    if (!invoice || !invoice.id) return;
+    try {
+        const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+        const customerId = invoice.customer;
+
+        // Resolver email
+        let email = (invoice.customer_email || '').toLowerCase().trim();
+        if (!email && customerId) {
+            try {
+                const c = await stripe.customers.retrieve(customerId);
+                email = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
+            } catch { /* noop */ }
+        }
+        if (!email) {
+            console.warn(`[invoice.payment_failed] sin email (invoice=${invoice.id}); skip`);
+            return;
+        }
+
+        const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
+        const priceId = lineItem && lineItem.price && lineItem.price.id;
+        const amountUSD = invoice.amount_due != null ? invoice.amount_due / 100
+            : (invoice.amount_paid != null ? invoice.amount_paid / 100 : 0);
+        const plan = inferPlan({ priceId, lineItem, amountUSD });
+
+        const failedAt = new Date();
+        const nextAttemptAt = invoice.next_payment_attempt
+            ? new Date(invoice.next_payment_attempt * 1000) : null;
+        const failureReason = invoice.last_finalization_error?.message
+            || invoice.last_payment_error?.message
+            || (lineItem && lineItem.description)
+            || 'Pago rechazado';
+
+        const existing = await Payment.findOne({ stripeInvoiceId: invoice.id });
+
+        if (!existing) {
+            await Payment.create({
+                email,
+                stripeCustomerId: customerId || null,
+                stripeInvoiceId: invoice.id,
+                stripeSubscriptionId: subscriptionId,
+                plan: plan || 'monthly',
+                amountUSD,
+                status: 'failed',
+                paidAt: failedAt, // usamos failedAt también como ancla temporal
+                failedAt,
+                failureReason,
+                attemptCount: invoice.attempt_count || 1,
+                nextAttemptAt
+            });
+        } else if (existing.status !== 'paid') {
+            // No pisamos un pago exitoso (caso: fallo en intento N, éxito en N+1).
+            await Payment.updateOne(
+                { _id: existing._id },
+                { $set: {
+                    status: 'failed',
+                    failedAt,
+                    failureReason,
+                    attemptCount: invoice.attempt_count || (existing.attemptCount || 0) + 1,
+                    nextAttemptAt,
+                    stripeSubscriptionId: subscriptionId || existing.stripeSubscriptionId,
+                    stripeCustomerId: customerId || existing.stripeCustomerId
+                } }
+            );
+        }
+
+        // Reflejar en User.subscription si existe (status pasa a past_due / unpaid).
+        const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const user = await User.findOne({
+            $or: [
+                { 'subscription.customerId': customerId },
+                { 'subscription.id': subscriptionId },
+                { email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } }
+            ]
+        });
+        if (user && user.subscription) {
+            // Stripe no nos da el status en este evento; lo más exacto: leerlo de la sub.
+            try {
+                if (subscriptionId) {
+                    const sub = await stripe.subscriptions.retrieve(subscriptionId);
+                    user.subscription.status = sub.status; // 'past_due' | 'unpaid' | 'canceled' | etc.
+                    await user.save();
+                }
+            } catch { /* noop */ }
+        }
+    } catch (err) {
+        console.error('[handleInvoicePaymentFailed]', err);
     }
 };
 

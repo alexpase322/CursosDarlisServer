@@ -57,8 +57,10 @@ const listSubscriptions = async (req, res) => {
                 lastAmountUSD: { $first: '$amountUSD' },
                 lastStatus: { $first: '$status' },
                 lastPlan: { $first: '$plan' },
+                lastFailureReason: { $first: '$failureReason' },
                 totalPaidUSD: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$amountUSD', 0] } },
-                paymentsCount: { $sum: 1 }
+                paymentsCount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] } },
+                failedCount: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } }
             }}
         ]);
         const paymentsByEmail = new Map(lastPayments.map(p => [p._id, p]));
@@ -75,10 +77,11 @@ const listSubscriptions = async (req, res) => {
                 createdAt: u.createdAt,
                 subscription: u.subscription || null,
                 lastPayment: p.lastPaidAt
-                    ? { paidAt: p.lastPaidAt, amountUSD: p.lastAmountUSD, status: p.lastStatus, plan: p.lastPlan }
+                    ? { paidAt: p.lastPaidAt, amountUSD: p.lastAmountUSD, status: p.lastStatus, plan: p.lastPlan, failureReason: p.lastFailureReason || null }
                     : null,
                 totalPaidUSD: p.totalPaidUSD || 0,
-                paymentsCount: p.paymentsCount || 0
+                paymentsCount: p.paymentsCount || 0,
+                failedCount: p.failedCount || 0
             };
         });
 
