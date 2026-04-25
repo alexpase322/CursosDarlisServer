@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Payment = require('../models/Payment');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 // const nodemailer = require('nodemailer'); <--- YA NO LO USAMOS
@@ -83,7 +84,10 @@ const getProfile = async (req, res) => {
         email: req.user.email,
         role: req.user.role,
         avatar: req.user.avatar,
-        bio: req.user.bio
+        bio: req.user.bio,
+        partnerLevel: req.user.partnerLevel || 1,
+        partnerActivatedAt: req.user.partnerActivatedAt,
+        subscription: req.user.subscription
     }
     res.status(200).json(user);
 };
@@ -91,22 +95,39 @@ const getProfile = async (req, res) => {
 // --- AQUÍ ESTÁ EL CAMBIO IMPORTANTE ---
 const inviteUser = async (req, res) => {
   const { email, role } = req.body;
+  const normalizedEmail = (email || '').toLowerCase().trim();
 
   try {
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({ email: normalizedEmail });
     if (userExists) {
       return res.status(400).json({ message: 'El usuario ya existe' });
+    }
+
+    // Validar pago previo en Stripe (excepto cuando invitas a otro admin).
+    if ((role || 'user') !== 'admin') {
+      const payment = await Payment.findOne({ email: normalizedEmail, status: 'paid' });
+      if (!payment) {
+        return res.status(402).json({
+          message: 'No se encontró un pago registrado para este correo. La alumna debe completar el pago antes de poder ser invitada.'
+        });
+      }
     }
 
     const token = crypto.randomBytes(20).toString('hex');
 
     const user = await User.create({
-      username: 'Usuario Pendiente', 
-      email,
+      username: 'Usuario Pendiente',
+      email: normalizedEmail,
       role: role || 'user',
       status: 'pending',
       invitationToken: token
     });
+
+    // Marcar el Payment como consumido por la invitación (informativo, no bloquea renovaciones).
+    await Payment.updateOne(
+      { email: normalizedEmail, status: 'paid', consumedByInviteAt: null },
+      { $set: { consumedByInviteAt: new Date() } }
+    );
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const inviteLink = `${frontendUrl}/setup-account/${token}`;
@@ -151,23 +172,31 @@ const completeProfile = async (req, res) => {
 
         if (req.file) {
             const result = await cloudinary.uploader.upload(req.file.path, {
-                folder: "lms_avatars", 
-                width: 300, 
+                folder: "lms_avatars",
+                width: 300,
                 crop: "scale"
             });
             user.avatar = result.secure_url;
             fs.unlinkSync(req.file.path);
         }
 
-        user.username = req.body.username || req.body.name; 
+        user.username = req.body.username || req.body.name;
 
         if (req.body.password) {
             const salt = await bcrypt.genSalt(10);
             user.password = await bcrypt.hash(req.body.password, salt);
         }
 
+        // Atribución de la referidora (opcional). Solo válido si la referida es N2+ y activa.
+        if (req.body.referredBy) {
+            const referrer = await User.findById(req.body.referredBy).select('partnerLevel status');
+            if (referrer && referrer.partnerLevel >= 2 && referrer.status === 'active') {
+                user.referredBy = referrer._id;
+            }
+        }
+
         user.status = 'active';
-        user.invitationToken = null; 
+        user.invitationToken = null;
 
         const updatedUser = await user.save();
 
@@ -267,4 +296,21 @@ const resetPassword = async (req, res) => {
     }
 };
 
-module.exports = { registerUser, loginUser, getProfile, inviteUser, completeProfile, resetPassword, forgotPassword };
+// @desc    Lista pública de afiliadas N2+ (para el dropdown de SetupAccount)
+// @route   GET /auth/affiliates-public
+const listPublicAffiliates = async (req, res) => {
+    try {
+        const affiliates = await User.find({
+            partnerLevel: { $gte: 2 },
+            status: 'active'
+        })
+            .select('_id username avatar partnerLevel')
+            .sort({ username: 1 });
+        res.json(affiliates);
+    } catch (error) {
+        console.error('listPublicAffiliates error:', error);
+        res.status(500).json({ message: 'Error al cargar afiliadas' });
+    }
+};
+
+module.exports = { registerUser, loginUser, getProfile, inviteUser, completeProfile, resetPassword, forgotPassword, listPublicAffiliates };

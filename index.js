@@ -9,7 +9,9 @@ const postRoutes = require('./routes/post.routes')
 const chatRoutes = require('./routes/chat.routes'); 
 const notificationRoutes = require('./routes/notification.routes')
 const paymentRoutes = require('./routes/payment.routes');
-const { stripeWebhook } = require('./controllers/payment.controller'); 
+const affiliateRoutes = require('./routes/affiliate.routes');
+const adminCrmRoutes = require('./routes/admin.crm.routes');
+const { stripeWebhook } = require('./controllers/payment.controller');
 const http = require('http'); 
 const { Server } = require('socket.io'); 
 
@@ -89,6 +91,8 @@ app.use('/posts', postRoutes);
 app.use('/chat', chatRoutes); 
 app.use('/notifications', notificationRoutes);
 app.use('/payment', paymentRoutes);
+app.use('/affiliate', affiliateRoutes);
+app.use('/admin', adminCrmRoutes);
 
 app.get('/', (req, res) => {
     res.send('API de Plataforma de Cursos funcionando...');
