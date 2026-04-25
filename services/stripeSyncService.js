@@ -55,8 +55,26 @@ async function syncStripePayments(opts = {}) {
         skippedNotRegistered: 0,
         refunded: 0,
         usersUpdated: 0,
-        trialsRecorded: 0
+        trialsRecorded: 0,
+        syntheticTrialsCleaned: 0
     };
+
+    // Cleanup previo: si ya existe un Payment "real" para una sub, eliminamos
+    // cualquier marcador sintético `trial_<subId>` que haya quedado de runs viejos.
+    if (!dryRun) {
+        const realSubIds = await Payment.distinct('stripeSubscriptionId', {
+            stripeInvoiceId: { $not: /^trial_/ },
+            stripeSubscriptionId: { $ne: null }
+        });
+        if (realSubIds.length > 0) {
+            const syntheticIds = realSubIds.map(s => `trial_${s}`);
+            const del = await Payment.deleteMany({ stripeInvoiceId: { $in: syntheticIds } });
+            counters.syntheticTrialsCleaned = del.deletedCount || 0;
+            if (counters.syntheticTrialsCleaned > 0) {
+                log(`cleanup: ${counters.syntheticTrialsCleaned} marcadores trial sintéticos eliminados`);
+            }
+        }
+    }
 
     // Whitelist de emails permitidos (usuarios no admin existentes en BD).
     let allowedEmails = null;
@@ -86,8 +104,10 @@ async function syncStripePayments(opts = {}) {
         }
     }
 
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     async function syncUserSubscription(email, subscription, plan) {
-        const user = await User.findOne({ email });
+        // Case-insensitive: el email en BD puede tener mayúsculas (no normalizado).
+        const user = await User.findOne({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
         if (!user) return;
         const wasInactive = !user.subscription || user.subscription.status !== 'active';
         user.subscription = {
@@ -182,6 +202,11 @@ async function syncStripePayments(opts = {}) {
         } else if (result.upsertedCount === 1) {
             counters.inserted += 1;
             if (refundedFlag) counters.refunded += 1;
+            // Si entra un invoice real para una sub para la que ya creamos un marcador
+            // sintético `trial_<subId>`, lo borramos para no duplicar.
+            if (subscriptionId) {
+                await Payment.deleteOne({ stripeInvoiceId: `trial_${subscriptionId}` });
+            }
         }
 
         // Backfill: si el Payment ya existía pero sin stripeSubscriptionId,
