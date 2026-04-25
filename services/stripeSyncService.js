@@ -13,9 +13,14 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Payment = require('../models/Payment');
 const User = require('../models/User');
-const { planFromStripePriceId } = require('../config/affiliateConfig');
+const { inferPlan } = require('../config/affiliateConfig');
 
 const ACTIVE_SUB_STATUSES = ['active', 'trialing', 'past_due'];
+
+// Piso temporal: nunca consideramos pagos anteriores a esta fecha
+// (anti-importación de cobros viejos no relacionados con la academia actual).
+const PAID_AT_FLOOR = new Date('2026-03-01T00:00:00.000Z');
+const PAID_AT_FLOOR_UNIX = Math.floor(PAID_AT_FLOOR.getTime() / 1000);
 
 // Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
 const getSubscriptionIdFromInvoice = (invoice) => {
@@ -52,12 +57,23 @@ async function syncStripePayments(opts = {}) {
         inserted: 0,
         alreadyExisted: 0,
         skipped: 0,
+        skippedTooOld: 0,
         skippedNotRegistered: 0,
         refunded: 0,
         usersUpdated: 0,
         trialsRecorded: 0,
-        syntheticTrialsCleaned: 0
+        syntheticTrialsCleaned: 0,
+        oldPaymentsCleaned: 0
     };
+
+    // Cleanup: borra cualquier Payment ya guardado con paidAt anterior al piso.
+    if (!dryRun) {
+        const delOld = await Payment.deleteMany({ paidAt: { $lt: PAID_AT_FLOOR } });
+        counters.oldPaymentsCleaned = delOld.deletedCount || 0;
+        if (counters.oldPaymentsCleaned > 0) {
+            log(`cleanup: ${counters.oldPaymentsCleaned} pagos previos a ${PAID_AT_FLOOR.toISOString().slice(0,10)} eliminados`);
+        }
+    }
 
     // Cleanup previo: si ya existe un Payment "real" para una sub, eliminamos
     // cualquier marcador sintético `trial_<subId>` que haya quedado de runs viejos.
@@ -126,15 +142,17 @@ async function syncStripePayments(opts = {}) {
     }
 
     // ---------- Pase 1: invoices pagadas ----------
-    const listParams = { status: 'paid', limit: 100 };
-    if (since) listParams.created = { gte: since };
+    // Piso temporal: el mayor entre el piso global y el `since` recibido.
+    const effectiveSince = Math.max(PAID_AT_FLOOR_UNIX, since || 0);
+    const listParams = { status: 'paid', limit: 100, created: { gte: effectiveSince } };
 
     for await (const invoice of stripe.invoices.list(listParams)) {
         counters.scanned += 1;
 
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
         const priceId = lineItem && lineItem.price && lineItem.price.id;
-        const plan = planFromStripePriceId(priceId);
+        const amountUSD = invoice.amount_paid != null ? invoice.amount_paid / 100 : 0;
+        const plan = inferPlan({ priceId, lineItem, amountUSD });
         if (planFilter && plan !== planFilter) {
             counters.skipped += 1;
             continue;
@@ -163,6 +181,11 @@ async function syncStripePayments(opts = {}) {
             ? new Date(invoice.status_transitions.paid_at * 1000)
             : new Date(invoice.created * 1000);
 
+        if (paidAt < PAID_AT_FLOOR) {
+            counters.skippedTooOld += 1;
+            continue;
+        }
+
         const subscriptionId = getSubscriptionIdFromInvoice(invoice);
 
         const doc = {
@@ -171,7 +194,7 @@ async function syncStripePayments(opts = {}) {
             stripeInvoiceId: invoice.id,
             stripeSubscriptionId: subscriptionId,
             plan: plan || 'monthly',
-            amountUSD: invoice.amount_paid != null ? invoice.amount_paid / 100 : 0,
+            amountUSD,
             status: refundedFlag ? 'refunded' : 'paid',
             paidAt,
             refundedAt: refundedFlag ? new Date() : null
@@ -218,6 +241,15 @@ async function syncStripePayments(opts = {}) {
             );
         }
 
+        // Backfill: si el Payment ya existía con un plan inferido distinto
+        // (por ej. todos los viejos quedaron como 'monthly'), lo corregimos.
+        if (existing && plan && existing.plan !== plan) {
+            await Payment.updateOne(
+                { stripeInvoiceId: invoice.id },
+                { $set: { plan } }
+            );
+        }
+
         if (subscriptionId) {
             try {
                 const sub = await stripe.subscriptions.retrieve(subscriptionId);
@@ -259,11 +291,15 @@ async function syncStripePayments(opts = {}) {
 
                 for (const sub of subs) {
                     if (!ACTIVE_SUB_STATUSES.includes(sub.status)) continue;
+                    const subStartDate = sub.start_date ? new Date(sub.start_date * 1000) : null;
+                    if (subStartDate && subStartDate < PAID_AT_FLOOR) continue;
 
-                    const subPriceId = sub.items && sub.items.data && sub.items.data[0]
-                        ? sub.items.data[0].price && sub.items.data[0].price.id
+                    const subItem = sub.items && sub.items.data && sub.items.data[0];
+                    const subPriceId = subItem && subItem.price && subItem.price.id;
+                    const subAmountUSD = subItem && subItem.price && subItem.price.unit_amount != null
+                        ? subItem.price.unit_amount / 100
                         : null;
-                    const plan = planFromStripePriceId(subPriceId);
+                    const plan = inferPlan({ priceId: subPriceId, lineItem: subItem, amountUSD: subAmountUSD });
                     if (planFilter && plan !== planFilter) continue;
 
                     // Sincronizar User.subscription siempre

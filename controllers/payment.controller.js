@@ -7,7 +7,7 @@ const {
     onReferredSubscriptionCanceled,
     voidCommissionByInvoiceId
 } = require('../services/commissionService');
-const { planFromStripePriceId } = require('../config/affiliateConfig');
+const { inferPlan } = require('../config/affiliateConfig');
 
 // 1. Crear Sesión de Checkout (Redirige al usuario a Stripe)
 const createCheckoutSession = async (req, res) => {
@@ -105,8 +105,10 @@ const handleCheckoutSuccess = async (session) => {
     if (!subscriptionId) return;
 
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-    const priceId = subscription.items.data[0]?.price?.id;
-    const plan = planFromStripePriceId(priceId);
+    const subItem = subscription.items.data[0];
+    const priceId = subItem?.price?.id;
+    const subAmountUSD = subItem?.price?.unit_amount != null ? subItem.price.unit_amount / 100 : null;
+    const plan = inferPlan({ priceId, lineItem: subItem, amountUSD: subAmountUSD });
 
     let user = null;
     if (userId) {
@@ -185,7 +187,8 @@ const registerPaymentFromInvoice = async (invoice, user) => {
     try {
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
         const priceId = lineItem && lineItem.price && lineItem.price.id;
-        const plan = planFromStripePriceId(priceId);
+        const amountUSD = invoice.amount_paid != null ? invoice.amount_paid / 100 : 0;
+        const plan = inferPlan({ priceId, lineItem, amountUSD });
         const subscriptionId = getSubscriptionIdFromInvoice(invoice);
 
         let email = (invoice.customer_email || (user && user.email) || '').toLowerCase().trim();
@@ -211,7 +214,7 @@ const registerPaymentFromInvoice = async (invoice, user) => {
                     stripeInvoiceId: invoice.id,
                     stripeSubscriptionId: subscriptionId,
                     plan: plan || 'monthly',
-                    amountUSD: invoice.amount_paid != null ? invoice.amount_paid / 100 : 0,
+                    amountUSD,
                     status: 'paid',
                     paidAt: invoice.status_transitions && invoice.status_transitions.paid_at
                         ? new Date(invoice.status_transitions.paid_at * 1000)

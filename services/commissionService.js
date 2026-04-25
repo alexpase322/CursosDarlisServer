@@ -1,6 +1,6 @@
 const Commission = require('../models/Commission');
 const User = require('../models/User');
-const { rates, prices, planFromStripePriceId } = require('../config/affiliateConfig');
+const { rates, prices, inferPlan } = require('../config/affiliateConfig');
 const { evaluateAutoPromotion } = require('./levelService');
 
 // Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
@@ -38,17 +38,18 @@ async function recordCommissionFromInvoice(invoice) {
 
     const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
     const priceId = lineItem && lineItem.price && lineItem.price.id;
-    const plan = planFromStripePriceId(priceId);
+    const grossAmountUSD = invoice.amount_paid != null
+        ? invoice.amount_paid / 100
+        : null;
+    const plan = inferPlan({ priceId, lineItem, amountUSD: grossAmountUSD });
     if (!plan) {
-        console.warn(`[commissions] priceId ${priceId} no mapea a ningún plan; skip.`);
+        console.warn(`[commissions] no pude inferir plan para invoice ${invoice.id} (priceId=${priceId}, amount=${grossAmountUSD}); skip.`);
         return null;
     }
 
-    const grossAmountUSD = invoice.amount_paid != null
-        ? invoice.amount_paid / 100
-        : prices[plan];
+    const finalGross = grossAmountUSD != null ? grossAmountUSD : prices[plan];
     const commissionPercent = rates[plan] * 100;
-    const commissionAmountUSD = +(grossAmountUSD * rates[plan]).toFixed(2);
+    const commissionAmountUSD = +(finalGross * rates[plan]).toFixed(2);
 
     const periodStart = lineItem && lineItem.period && lineItem.period.start
         ? new Date(lineItem.period.start * 1000)
@@ -65,7 +66,7 @@ async function recordCommissionFromInvoice(invoice) {
             stripeInvoiceId: invoice.id,
             stripeSubscriptionId: getSubscriptionIdFromInvoice(invoice),
             plan,
-            grossAmountUSD,
+            grossAmountUSD: finalGross,
             commissionPercent,
             commissionAmountUSD,
             periodStart,

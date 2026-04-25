@@ -35,11 +35,41 @@ function planFromStripePriceId(priceId) {
     return stripePriceMap[priceId] || null;
 }
 
+// Deduce el plan desde un line_item de Stripe usando, en orden:
+//   1) priceId mapeado en .env (STRIPE_PRICE_*)
+//   2) recurring.interval + interval_count (month×1, month×3, year×1)
+//   3) monto (≈$50, ≈$120, ≈$397) como último recurso
+function inferPlan({ priceId, lineItem, amountUSD } = {}) {
+    let plan = planFromStripePriceId(priceId);
+    if (plan) return plan;
+
+    const price = lineItem && lineItem.price;
+    const recurring = (price && price.recurring) || (lineItem && lineItem.recurring);
+    if (recurring && recurring.interval) {
+        const interval = recurring.interval;
+        const count = recurring.interval_count || 1;
+        if (interval === 'year') return 'yearly';
+        if (interval === 'month' && count >= 12) return 'yearly';
+        if (interval === 'month' && count === 3) return 'quarterly';
+        if (interval === 'month' && count === 1) return 'monthly';
+    }
+
+    const amt = Number(amountUSD);
+    if (Number.isFinite(amt) && amt > 0) {
+        // Buckets tolerantes (descuentos, impuestos, redondeo Stripe).
+        if (amt >= 250) return 'yearly';
+        if (amt >= 90)  return 'quarterly';
+        if (amt >= 1)   return 'monthly';
+    }
+    return null;
+}
+
 module.exports = {
     rates,
     prices,
     stripePriceMap,
     promotion,
     levels,
-    planFromStripePriceId
+    planFromStripePriceId,
+    inferPlan
 };
