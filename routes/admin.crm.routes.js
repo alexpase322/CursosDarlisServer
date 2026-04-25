@@ -13,6 +13,7 @@ const {
     rejectApplication
 } = require('../controllers/admin.crm.controller');
 const { syncPayments } = require('../controllers/stripe.sync.controller');
+const { listSubscriptions } = require('../controllers/admin.subscriptions.controller');
 
 router.use(protect, admin);
 
@@ -29,5 +30,7 @@ router.post('/partner-applications/:id/approve', approveApplication);
 router.post('/partner-applications/:id/reject', rejectApplication);
 
 router.post('/stripe/sync-payments', syncPayments);
+
+router.get('/subscriptions', listSubscriptions);
 
 module.exports = router;
