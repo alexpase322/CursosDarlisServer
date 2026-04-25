@@ -3,6 +3,23 @@ const User = require('../models/User');
 const { rates, prices, planFromStripePriceId } = require('../config/affiliateConfig');
 const { evaluateAutoPromotion } = require('./levelService');
 
+// Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
+const getSubscriptionIdFromInvoice = (invoice) => {
+    if (!invoice) return null;
+    if (invoice.subscription) return invoice.subscription;
+    if (invoice.parent && invoice.parent.subscription_details && invoice.parent.subscription_details.subscription) {
+        return invoice.parent.subscription_details.subscription;
+    }
+    const lines = invoice.lines && invoice.lines.data ? invoice.lines.data : [];
+    for (const li of lines) {
+        if (li.subscription) return li.subscription;
+        if (li.parent && li.parent.subscription_item_details && li.parent.subscription_item_details.subscription) {
+            return li.parent.subscription_item_details.subscription;
+        }
+    }
+    return null;
+};
+
 // Idempotente: si ya existe una Commission con el mismo stripeInvoiceId, no se duplica.
 // Si referredUser no tiene referredBy → return null (la academia se queda con el cobro).
 async function recordCommissionFromInvoice(invoice) {
@@ -46,7 +63,7 @@ async function recordCommissionFromInvoice(invoice) {
             affiliate: affiliate._id,
             referredUser: referredUser._id,
             stripeInvoiceId: invoice.id,
-            stripeSubscriptionId: invoice.subscription || null,
+            stripeSubscriptionId: getSubscriptionIdFromInvoice(invoice),
             plan,
             grossAmountUSD,
             commissionPercent,

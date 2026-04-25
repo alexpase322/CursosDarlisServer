@@ -159,6 +159,26 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     await registerPaymentFromInvoice(invoice, user);
 };
 
+// Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
+// API ≤ 2024: invoice.subscription
+// API ≥ 2024-09: invoice.parent.subscription_details.subscription o
+//                invoice.lines.data[*].subscription / parent.subscription_item_details.subscription
+const getSubscriptionIdFromInvoice = (invoice) => {
+    if (!invoice) return null;
+    if (invoice.subscription) return invoice.subscription;
+    if (invoice.parent && invoice.parent.subscription_details && invoice.parent.subscription_details.subscription) {
+        return invoice.parent.subscription_details.subscription;
+    }
+    const lines = invoice.lines && invoice.lines.data ? invoice.lines.data : [];
+    for (const li of lines) {
+        if (li.subscription) return li.subscription;
+        if (li.parent && li.parent.subscription_item_details && li.parent.subscription_item_details.subscription) {
+            return li.parent.subscription_item_details.subscription;
+        }
+    }
+    return null;
+};
+
 // Crea un Payment idempotente desde un invoice de Stripe.
 const registerPaymentFromInvoice = async (invoice, user) => {
     if (!invoice || !invoice.id) return;
@@ -166,6 +186,7 @@ const registerPaymentFromInvoice = async (invoice, user) => {
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
         const priceId = lineItem && lineItem.price && lineItem.price.id;
         const plan = planFromStripePriceId(priceId);
+        const subscriptionId = getSubscriptionIdFromInvoice(invoice);
 
         let email = (invoice.customer_email || (user && user.email) || '').toLowerCase().trim();
         if (!email && invoice.customer) {
@@ -188,7 +209,7 @@ const registerPaymentFromInvoice = async (invoice, user) => {
                     email,
                     stripeCustomerId: invoice.customer || null,
                     stripeInvoiceId: invoice.id,
-                    stripeSubscriptionId: invoice.subscription || null,
+                    stripeSubscriptionId: subscriptionId,
                     plan: plan || 'monthly',
                     amountUSD: invoice.amount_paid != null ? invoice.amount_paid / 100 : 0,
                     status: 'paid',

@@ -17,6 +17,23 @@ const { planFromStripePriceId } = require('../config/affiliateConfig');
 
 const ACTIVE_SUB_STATUSES = ['active', 'trialing', 'past_due'];
 
+// Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
+const getSubscriptionIdFromInvoice = (invoice) => {
+    if (!invoice) return null;
+    if (invoice.subscription) return invoice.subscription;
+    if (invoice.parent && invoice.parent.subscription_details && invoice.parent.subscription_details.subscription) {
+        return invoice.parent.subscription_details.subscription;
+    }
+    const lines = invoice.lines && invoice.lines.data ? invoice.lines.data : [];
+    for (const li of lines) {
+        if (li.subscription) return li.subscription;
+        if (li.parent && li.parent.subscription_item_details && li.parent.subscription_item_details.subscription) {
+            return li.parent.subscription_item_details.subscription;
+        }
+    }
+    return null;
+};
+
 async function syncStripePayments(opts = {}) {
     const {
         dryRun = false,
@@ -126,11 +143,13 @@ async function syncStripePayments(opts = {}) {
             ? new Date(invoice.status_transitions.paid_at * 1000)
             : new Date(invoice.created * 1000);
 
+        const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+
         const doc = {
             email,
             stripeCustomerId: invoice.customer || null,
             stripeInvoiceId: invoice.id,
-            stripeSubscriptionId: invoice.subscription || null,
+            stripeSubscriptionId: subscriptionId,
             plan: plan || 'monthly',
             amountUSD: invoice.amount_paid != null ? invoice.amount_paid / 100 : 0,
             status: refundedFlag ? 'refunded' : 'paid',
@@ -165,12 +184,21 @@ async function syncStripePayments(opts = {}) {
             if (refundedFlag) counters.refunded += 1;
         }
 
-        if (invoice.subscription) {
+        // Backfill: si el Payment ya existía pero sin stripeSubscriptionId,
+        // lo actualizamos ahora que sabemos cómo extraerlo.
+        if (existing && subscriptionId && !existing.stripeSubscriptionId) {
+            await Payment.updateOne(
+                { stripeInvoiceId: invoice.id },
+                { $set: { stripeSubscriptionId: subscriptionId } }
+            );
+        }
+
+        if (subscriptionId) {
             try {
-                const sub = await stripe.subscriptions.retrieve(invoice.subscription);
+                const sub = await stripe.subscriptions.retrieve(subscriptionId);
                 await syncUserSubscription(email, sub, plan);
             } catch (err) {
-                log(`no pude leer sub ${invoice.subscription}: ${err.message}`);
+                log(`no pude leer sub ${subscriptionId}: ${err.message}`);
             }
         }
     }
