@@ -89,4 +89,73 @@ const listSubscriptions = async (req, res) => {
     }
 };
 
-module.exports = { listSubscriptions };
+// POST /admin/subscriptions/:userId/manual-payment
+// Registra un pago "fuera de Stripe" (transferencia, beacons, etc.) para que la alumna
+// pueda solicitar afiliarse. Crea un Payment con id sintético `manual_<userId>_<ts>` y,
+// opcionalmente, sincroniza User.subscription para que el panel la muestre como activa.
+const PLAN_DURATIONS_DAYS = { monthly: 30, quarterly: 90, yearly: 365 };
+const PLAN_PRICES_USD = { monthly: 50, quarterly: 120, yearly: 397 };
+
+const registerManualPayment = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const {
+            plan = 'monthly',
+            amountUSD,
+            paidAt,
+            method = 'transfer',
+            note = '',
+            updateSubscription = true
+        } = req.body || {};
+
+        if (!['monthly', 'quarterly', 'yearly'].includes(plan)) {
+            return res.status(400).json({ message: 'Plan inválido' });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: 'Usuaria no encontrada' });
+
+        const paid = paidAt ? new Date(paidAt) : new Date();
+        const amt = Number.isFinite(Number(amountUSD)) ? Number(amountUSD) : PLAN_PRICES_USD[plan];
+
+        const invoiceId = `manual_${user._id}_${paid.getTime()}`;
+
+        const payment = await Payment.create({
+            email: (user.email || '').toLowerCase().trim(),
+            stripeInvoiceId: invoiceId,
+            plan,
+            amountUSD: amt,
+            status: 'paid',
+            paidAt: paid
+        });
+
+        if (updateSubscription) {
+            const days = PLAN_DURATIONS_DAYS[plan] || 30;
+            const periodEnd = new Date(paid.getTime() + days * 24 * 60 * 60 * 1000);
+            user.subscription = {
+                ...(user.subscription || {}),
+                id: user.subscription?.id || `manual_${user._id}`,
+                status: 'active',
+                plan,
+                currentPeriodEnd: periodEnd,
+                customerId: user.subscription?.customerId
+            };
+            await user.save();
+        }
+
+        res.json({
+            ok: true,
+            payment,
+            user: { _id: user._id, subscription: user.subscription },
+            meta: { method, note }
+        });
+    } catch (err) {
+        console.error('registerManualPayment', err);
+        if (err.code === 11000) {
+            return res.status(409).json({ message: 'Ya existe un pago con ese identificador' });
+        }
+        res.status(500).json({ message: 'Error al registrar pago manual' });
+    }
+};
+
+module.exports = { listSubscriptions, registerManualPayment };
