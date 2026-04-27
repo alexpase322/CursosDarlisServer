@@ -20,6 +20,7 @@ const userSchema = new mongoose.Schema({
         default: "pending"
     },
     invitationToken: { type: String },
+    invitationSentAt: { type: Date, default: null },
     resetPasswordToken: { type: String },
     resetPasswordExpire: { type: Date },
     subscription: {

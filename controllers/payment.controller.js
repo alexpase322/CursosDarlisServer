@@ -8,6 +8,7 @@ const {
     voidCommissionByInvoiceId
 } = require('../services/commissionService');
 const { inferPlan } = require('../config/affiliateConfig');
+const { sendInvitation } = require('../services/invitationService');
 
 // 1. Crear Sesión de Checkout (Redirige al usuario a Stripe)
 const createCheckoutSession = async (req, res) => {
@@ -198,6 +199,24 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
 
     // Registrar el pago en la tabla Payment (ticket de acceso para futuras invitaciones).
     await registerPaymentFromInvoice(invoice, user);
+
+    // Auto-invitación: si la persona aún no tiene cuenta activa, le mandamos el correo
+    // de invitación a Arquitecta. El service es idempotente (no spammea renovaciones).
+    let autoInviteEmail = (user && user.email) || (invoice.customer_email || '').toLowerCase().trim();
+    if (!autoInviteEmail && customerId) {
+        try {
+            const c = await stripe.customers.retrieve(customerId);
+            autoInviteEmail = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
+        } catch { /* noop */ }
+    }
+    if (autoInviteEmail) {
+        try {
+            const r = await sendInvitation({ email: autoInviteEmail, role: 'user', mode: 'auto' });
+            console.log(`[auto-invite] ${autoInviteEmail} → ${r.reason}`);
+        } catch (err) {
+            console.error('[auto-invite] error:', err.message);
+        }
+    }
 };
 
 // Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.

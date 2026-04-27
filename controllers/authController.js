@@ -7,6 +7,7 @@ const { Resend } = require('resend'); // <--- NUEVO
 const cloudinary = require('../config/cloudinary'); 
 const fs = require('fs');
 const crypto = require('crypto');
+const { sendInvitation } = require('../services/invitationService');
 
 // Inicializar Resend
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -92,68 +93,28 @@ const getProfile = async (req, res) => {
     res.status(200).json(user);
 };
 
-// --- AQUÍ ESTÁ EL CAMBIO IMPORTANTE ---
+// Invitar manualmente desde el panel admin. Sin validación de pago: si la alumna
+// pagó por transferencia/beacons o vamos a registrar el pago manualmente,
+// igual queremos poder enviarle la invitación.
 const inviteUser = async (req, res) => {
   const { email, role } = req.body;
-  const normalizedEmail = (email || '').toLowerCase().trim();
-
   try {
-    const userExists = await User.findOne({ email: normalizedEmail });
-    if (userExists) {
-      return res.status(400).json({ message: 'El usuario ya existe' });
+    const result = await sendInvitation({ email, role: role || 'user', mode: 'manual' });
+
+    if (result.reason === 'email_required') {
+      return res.status(400).json({ message: 'El email es obligatorio.' });
+    }
+    if (result.reason === 'already_active') {
+      return res.status(400).json({ message: 'El usuario ya existe y está activo.' });
+    }
+    if (result.reason === 'email_failed') {
+      return res.status(500).json({ message: 'Error al enviar el correo.', link: result.link });
     }
 
-    // Validar pago previo en Stripe (excepto cuando invitas a otro admin).
-    if ((role || 'user') !== 'admin') {
-      const payment = await Payment.findOne({ email: normalizedEmail, status: 'paid' });
-      if (!payment) {
-        return res.status(402).json({
-          message: 'No se encontró un pago registrado para este correo. La alumna debe completar el pago antes de poder ser invitada.'
-        });
-      }
-    }
-
-    const token = crypto.randomBytes(20).toString('hex');
-
-    const user = await User.create({
-      username: 'Usuario Pendiente',
-      email: normalizedEmail,
-      role: role || 'user',
-      status: 'pending',
-      invitationToken: token
-    });
-
-    // Marcar el Payment como consumido por la invitación (informativo, no bloquea renovaciones).
-    await Payment.updateOne(
-      { email: normalizedEmail, status: 'paid', consumedByInviteAt: null },
-      { $set: { consumedByInviteAt: new Date() } }
-    );
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const inviteLink = `${frontendUrl}/setup-account/${token}`;
-
-    // USANDO RESEND (Nunca da timeout en Render)
-    await resend.emails.send({
-      from: 'Soporte <soporte@arquitectadetupropioexito.com>', // Usa este remitente de prueba si no tienes dominio propio
-      to: email,
-      subject: '¡Te han invitado a unirte al equipo!',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-          <h2 style="color: #2563eb;">Bienvenido a la plataforma</h2>
-          <p>Has sido invitado a unirte a nuestro Dashboard como <strong>${role || 'user'}</strong>.</p>
-          <p>Para configurar tu cuenta, contraseña y foto, haz clic en el siguiente botón:</p>
-          <a href="https://chat.whatsapp.com/JAwyMpcAIY9HnQwV6xttMD" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Grupo privado</a>
-          <a href="${inviteLink}" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Aceptar Invitación</a>
-          <p style="margin-top: 20px; font-size: 12px; color: #666;">Si el botón no funciona, copia este enlace: ${inviteLink}</p>
-        </div>
-      `
-    });
-
-    res.status(201).json({
+    return res.status(201).json({
       message: `Invitación enviada correctamente a ${email}`,
-      link: inviteLink 
+      link: result.link
     });
-
   } catch (error) {
     console.error("Error en inviteUser:", error);
     res.status(500).json({ message: 'Error al enviar la invitación. Verifica las credenciales.' });
