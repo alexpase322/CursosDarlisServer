@@ -152,26 +152,41 @@ const handleCheckoutSuccess = async (session) => {
 const handleInvoicePaymentSucceeded = async (invoice) => {
     const customerId = invoice.customer;
     const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    // Buscar usuario por (1) customerId, (2) subscriptionId, (3) email del invoice (case-insensitive).
+    // Resolver email del invoice (lo necesitamos sí o sí para auto-invitar).
+    let email = (invoice.customer_email || '').toLowerCase().trim();
+    if (!email && customerId) {
+        try {
+            const c = await stripe.customers.retrieve(customerId);
+            email = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
+        } catch { /* noop */ }
+    }
+
+    // Buscar usuario por (1) customerId, (2) subscriptionId, (3) email.
     let user = await User.findOne({ 'subscription.customerId': customerId });
     if (!user && subscriptionId) {
         user = await User.findOne({ 'subscription.id': subscriptionId });
     }
-    if (!user) {
-        let email = (invoice.customer_email || '').toLowerCase().trim();
-        if (!email && customerId) {
-            try {
-                const c = await stripe.customers.retrieve(customerId);
-                email = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
-            } catch { /* noop */ }
-        }
-        if (email) {
-            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            user = await User.findOne({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
+    if (!user && email) {
+        user = await User.findOne({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
+    }
+
+    // Si NO existe el User aún, lo creamos vía auto-invite ANTES de actualizar
+    // subscription. Sin esto el correo dispara la creación tarde y se queda sin sub.
+    if (!user && email) {
+        try {
+            const r = await sendInvitation({ email, role: 'user', mode: 'auto' });
+            console.log(`[auto-invite] ${email} → ${r.reason}`);
+            if (r.userId) {
+                user = await User.findById(r.userId);
+            }
+        } catch (err) {
+            console.error('[auto-invite] error:', err.message);
         }
     }
 
+    // Ahora sí, asignar/actualizar la subscription en el User.
     if (user) {
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
         const periodEnd = lineItem && lineItem.period && lineItem.period.end
@@ -190,7 +205,7 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
         };
         await user.save();
     } else {
-        console.warn(`[invoice.payment_succeeded] usuario no encontrado (customer=${customerId}, sub=${subscriptionId}, email=${invoice.customer_email})`);
+        console.warn(`[invoice.payment_succeeded] usuario no encontrado y sin email (customer=${customerId}, sub=${subscriptionId})`);
     }
 
     // billing_reason puede ser 'subscription_create' (primer cobro) o 'subscription_cycle' (renovación).
@@ -200,19 +215,11 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     // Registrar el pago en la tabla Payment (ticket de acceso para futuras invitaciones).
     await registerPaymentFromInvoice(invoice, user);
 
-    // Auto-invitación: si la persona aún no tiene cuenta activa, le mandamos el correo
-    // de invitación a Arquitecta. El service es idempotente (no spammea renovaciones).
-    let autoInviteEmail = (user && user.email) || (invoice.customer_email || '').toLowerCase().trim();
-    if (!autoInviteEmail && customerId) {
+    // Auto-invite también para renovaciones (idempotente: no spammea si ya se envió).
+    if (email && user && !user.invitationSentAt) {
         try {
-            const c = await stripe.customers.retrieve(customerId);
-            autoInviteEmail = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
-        } catch { /* noop */ }
-    }
-    if (autoInviteEmail) {
-        try {
-            const r = await sendInvitation({ email: autoInviteEmail, role: 'user', mode: 'auto' });
-            console.log(`[auto-invite] ${autoInviteEmail} → ${r.reason}`);
+            const r = await sendInvitation({ email, role: 'user', mode: 'auto' });
+            console.log(`[auto-invite] ${email} → ${r.reason}`);
         } catch (err) {
             console.error('[auto-invite] error:', err.message);
         }

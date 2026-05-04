@@ -13,7 +13,7 @@ const {
     rejectApplication
 } = require('../controllers/admin.crm.controller');
 const { syncPayments } = require('../controllers/stripe.sync.controller');
-const { listSubscriptions, registerManualPayment } = require('../controllers/admin.subscriptions.controller');
+const { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayments } = require('../controllers/admin.subscriptions.controller');
 const { getMonthlyRevenue } = require('../controllers/admin.revenue.controller');
 
 router.use(protect, admin);
@@ -34,6 +34,7 @@ router.post('/stripe/sync-payments', syncPayments);
 
 router.get('/subscriptions', listSubscriptions);
 router.post('/subscriptions/:userId/manual-payment', registerManualPayment);
+router.post('/subscriptions/backfill-from-payments', backfillSubscriptionsFromPayments);
 
 router.get('/revenue/monthly', getMonthlyRevenue);
 

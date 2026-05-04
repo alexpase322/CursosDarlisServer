@@ -161,4 +161,72 @@ const registerManualPayment = async (req, res) => {
     }
 };
 
-module.exports = { listSubscriptions, registerManualPayment };
+// POST /admin/subscriptions/backfill-from-payments
+// Para cada usuario sin subscription pero con un Payment.stripeSubscriptionId,
+// trae la sub desde Stripe y le asigna User.subscription. NO toca usuarios que
+// tengan subscription manual ni borra nada — solo rellena lo que falta.
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const backfillSubscriptionsFromPayments = async (req, res) => {
+    try {
+        if (!process.env.STRIPE_SECRET_KEY) {
+            return res.status(500).json({ message: 'Falta STRIPE_SECRET_KEY' });
+        }
+
+        // Usuarios sin subscription (o con status vacío) y rol != admin.
+        const candidates = await User.find({
+            role: { $ne: 'admin' },
+            $or: [
+                { subscription: { $exists: false } },
+                { subscription: null },
+                { 'subscription.id': { $in: [null, ''] } },
+                { 'subscription.status': { $in: [null, ''] } }
+            ]
+        }).lean();
+
+        const stats = { scanned: candidates.length, updated: 0, noPayment: 0, noStripeSub: 0, errors: 0 };
+
+        for (const u of candidates) {
+            const email = (u.email || '').toLowerCase().trim();
+            if (!email) { stats.noPayment += 1; continue; }
+
+            const lastPaid = await Payment.findOne({
+                email,
+                status: 'paid',
+                stripeSubscriptionId: { $nin: [null, ''] },
+                stripeInvoiceId: { $not: /^manual_/ } // ignoramos pagos manuales
+            }).sort({ paidAt: -1 }).lean();
+
+            if (!lastPaid) { stats.noPayment += 1; continue; }
+            if (!lastPaid.stripeSubscriptionId) { stats.noStripeSub += 1; continue; }
+
+            try {
+                const sub = await stripe.subscriptions.retrieve(lastPaid.stripeSubscriptionId);
+                await User.updateOne(
+                    { _id: u._id },
+                    { $set: {
+                        subscription: {
+                            id: sub.id,
+                            customerId: sub.customer,
+                            status: sub.status,
+                            plan: lastPaid.plan,
+                            currentPeriodEnd: sub.current_period_end
+                                ? new Date(sub.current_period_end * 1000)
+                                : null
+                        }
+                    } }
+                );
+                stats.updated += 1;
+            } catch (err) {
+                console.error(`backfill ${email}:`, err.message);
+                stats.errors += 1;
+            }
+        }
+
+        res.json({ ok: true, stats });
+    } catch (err) {
+        console.error('backfillSubscriptionsFromPayments', err);
+        res.status(500).json({ message: 'Error en backfill' });
+    }
+};
+
+module.exports = { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayments };
