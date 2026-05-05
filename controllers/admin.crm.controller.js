@@ -17,14 +17,57 @@ const listAffiliates = async (req, res) => {
             ];
         }
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        const [items, total] = await Promise.all([
+        const [users, total] = await Promise.all([
             User.find(filter)
                 .select('username email avatar partnerLevel partnerLevelSetManually partnerActivatedAt referralStats createdAt')
                 .sort(sort)
                 .skip(skip)
-                .limit(parseInt(limit)),
+                .limit(parseInt(limit))
+                .lean(),
             User.countDocuments(filter)
         ]);
+
+        // Stats LIVE por afiliada (no dependemos de contadores almacenados que pueden quedar desfasados).
+        const ids = users.map(u => u._id);
+        const [activeAgg, totalAgg, commAgg] = await Promise.all([
+            User.aggregate([
+                { $match: { referredBy: { $in: ids }, 'subscription.status': { $in: ['active', 'trialing', 'past_due'] } } },
+                { $group: { _id: '$referredBy', n: { $sum: 1 } } }
+            ]),
+            User.aggregate([
+                { $match: { referredBy: { $in: ids } } },
+                { $group: { _id: '$referredBy', n: { $sum: 1 } } }
+            ]),
+            Commission.aggregate([
+                { $match: { affiliate: { $in: ids } } },
+                { $group: { _id: { aff: '$affiliate', status: '$status' }, total: { $sum: '$commissionAmountUSD' } } }
+            ])
+        ]);
+        const activeMap = new Map(activeAgg.map(x => [String(x._id), x.n]));
+        const totalMap = new Map(totalAgg.map(x => [String(x._id), x.n]));
+        const commMap = new Map();
+        for (const c of commAgg) {
+            const k = String(c._id.aff);
+            const cur = commMap.get(k) || { available: 0, pending: 0, paid: 0, voided: 0 };
+            cur[c._id.status] = c.total;
+            commMap.set(k, cur);
+        }
+
+        const items = users.map(u => {
+            const k = String(u._id);
+            const c = commMap.get(k) || { available: 0, pending: 0, paid: 0, voided: 0 };
+            return {
+                ...u,
+                referralStats: {
+                    activeReferred: activeMap.get(k) || 0,
+                    totalReferred: totalMap.get(k) || 0,
+                    pendingUSD: +(c.available + c.pending).toFixed(2),
+                    paidUSD: +c.paid.toFixed(2),
+                    totalEarnedUSD: +(c.available + c.pending + c.paid).toFixed(2)
+                }
+            };
+        });
+
         res.json({ items, total, page: parseInt(page), limit: parseInt(limit) });
     } catch (err) {
         console.error('listAffiliates', err);
@@ -36,18 +79,37 @@ const listAffiliates = async (req, res) => {
 const getAffiliateDetail = async (req, res) => {
     try {
         const user = await User.findById(req.params.id)
-            .select('username email avatar partnerLevel partnerLevelSetManually partnerActivatedAt referralStats subscription createdAt');
+            .select('username email avatar partnerLevel partnerLevelSetManually partnerActivatedAt referralStats subscription createdAt')
+            .lean();
         if (!user) return res.status(404).json({ message: 'No encontrada' });
 
-        const [referrals, commissions] = await Promise.all([
+        const [referrals, commissions, statusAgg, totalReferred, activeReferred] = await Promise.all([
             User.find({ referredBy: user._id })
                 .select('username avatar email subscription createdAt')
                 .sort({ createdAt: -1 }),
             Commission.find({ affiliate: user._id })
                 .sort({ createdAt: -1 })
                 .limit(100)
-                .populate('referredUser', 'username avatar email')
+                .populate('referredUser', 'username avatar email'),
+            Commission.aggregate([
+                { $match: { affiliate: user._id } },
+                { $group: { _id: '$status', total: { $sum: '$commissionAmountUSD' } } }
+            ]),
+            User.countDocuments({ referredBy: user._id }),
+            User.countDocuments({
+                referredBy: user._id,
+                'subscription.status': { $in: ['active', 'trialing', 'past_due'] }
+            })
         ]);
+        const byStatus = { available: 0, pending: 0, paid: 0, voided: 0 };
+        for (const s of statusAgg) byStatus[s._id] = s.total;
+        user.referralStats = {
+            activeReferred,
+            totalReferred,
+            pendingUSD: +(byStatus.available + byStatus.pending).toFixed(2),
+            paidUSD: +byStatus.paid.toFixed(2),
+            totalEarnedUSD: +(byStatus.available + byStatus.pending + byStatus.paid).toFixed(2)
+        };
 
         res.json({ user, referrals, commissions });
     } catch (err) {
