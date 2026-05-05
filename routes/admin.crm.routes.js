@@ -10,7 +10,8 @@ const {
     bulkMarkCommissionsPaid,
     listApplications,
     approveApplication,
-    rejectApplication
+    rejectApplication,
+    recalculateCommissions
 } = require('../controllers/admin.crm.controller');
 const { syncPayments } = require('../controllers/stripe.sync.controller');
 const { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayments } = require('../controllers/admin.subscriptions.controller');
@@ -23,6 +24,7 @@ router.get('/affiliates/:id', getAffiliateDetail);
 router.put('/affiliates/:id/level', changeLevel);
 
 router.get('/commissions', listCommissions);
+router.post('/commissions/recalculate', recalculateCommissions);
 router.post('/commissions/bulk-mark-paid', bulkMarkCommissionsPaid);
 router.post('/commissions/:id/mark-paid', markCommissionPaid);
 

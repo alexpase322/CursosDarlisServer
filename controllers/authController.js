@@ -8,6 +8,7 @@ const cloudinary = require('../config/cloudinary');
 const fs = require('fs');
 const crypto = require('crypto');
 const { sendInvitation } = require('../services/invitationService');
+const { backfillCommissionsForUser, onReferredSubscriptionActivated } = require('../services/commissionService');
 
 // Inicializar Resend
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -160,6 +161,19 @@ const completeProfile = async (req, res) => {
         user.invitationToken = null;
 
         const updatedUser = await user.save();
+
+        // Si se acaba de atribuir referidora, contamos como referida activa
+        // y backfillamos comisiones de pagos previos (caso típico: pago Stripe
+        // entró antes de que la alumna eligiera su referidora aquí).
+        if (updatedUser.referredBy) {
+            try {
+                await onReferredSubscriptionActivated(updatedUser);
+                const r = await backfillCommissionsForUser(updatedUser);
+                console.log(`[completeProfile] commission backfill ${updatedUser.email}: created=${r.created} skipped=${r.skipped}`);
+            } catch (err) {
+                console.error('[completeProfile] commission backfill error:', err.message);
+            }
+        }
 
         res.json({
             _id: updatedUser._id,

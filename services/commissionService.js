@@ -22,14 +22,61 @@ const getSubscriptionIdFromInvoice = (invoice) => {
 
 // Idempotente: si ya existe una Commission con el mismo stripeInvoiceId, no se duplica.
 // Si referredUser no tiene referredBy → return null (la academia se queda con el cobro).
-async function recordCommissionFromInvoice(invoice) {
+// Recorre los Payments paid de un usuario y crea Commission para los que aún
+// no la tienen. Pensado para backfillear cuando la atribución de referidora
+// se setea DESPUÉS del pago (caso típico: pago Stripe → webhook → User creado
+// sin referredBy → alumna entra al setup-account y elige referidora).
+async function backfillCommissionsForUser(referredUser) {
+    if (!referredUser || !referredUser.referredBy) return { created: 0, skipped: 0 };
+
+    const Payment = require('../models/Payment');
+    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+    const email = (referredUser.email || '').toLowerCase().trim();
+    if (!email) return { created: 0, skipped: 0 };
+
+    const payments = await Payment.find({
+        email,
+        status: 'paid',
+        amountUSD: { $gt: 0 },
+        stripeInvoiceId: { $not: /^manual_|^trial_/ }
+    }).lean();
+
+    let created = 0, skipped = 0;
+    for (const p of payments) {
+        const exists = await Commission.findOne({ stripeInvoiceId: p.stripeInvoiceId });
+        if (exists) { skipped += 1; continue; }
+        try {
+            const invoice = await stripe.invoices.retrieve(p.stripeInvoiceId);
+            const c = await recordCommissionFromInvoice(invoice);
+            if (c) created += 1; else skipped += 1;
+        } catch (err) {
+            console.warn(`backfillCommissions invoice ${p.stripeInvoiceId}:`, err.message);
+            skipped += 1;
+        }
+    }
+    return { created, skipped };
+}
+
+async function recordCommissionFromInvoice(invoice, opts = {}) {
     if (!invoice || !invoice.id) return null;
 
     const existing = await Commission.findOne({ stripeInvoiceId: invoice.id });
     if (existing) return existing;
 
     const customerId = invoice.customer;
-    const referredUser = await User.findOne({ 'subscription.customerId': customerId });
+    let referredUser = opts.referredUser || await User.findOne({ 'subscription.customerId': customerId });
+    // Fallback: buscar por email del invoice (caso webhook llega antes de que
+    // User.subscription.customerId esté seteado).
+    if (!referredUser) {
+        const email = (invoice.customer_email || '').toLowerCase().trim();
+        if (email) {
+            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            referredUser = await User.findOne({
+                email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' }
+            });
+        }
+    }
     if (!referredUser) return null;
     if (!referredUser.referredBy) return null;
 
@@ -144,6 +191,7 @@ async function voidCommissionByInvoiceId(invoiceId) {
 
 module.exports = {
     recordCommissionFromInvoice,
+    backfillCommissionsForUser,
     onReferredSubscriptionActivated,
     onReferredSubscriptionCanceled,
     voidCommissionByInvoiceId

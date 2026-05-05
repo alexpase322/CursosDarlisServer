@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Commission = require('../models/Commission');
 const PartnerApplication = require('../models/PartnerApplication');
 const { setLevelManually } = require('../services/levelService');
+const { backfillCommissionsForUser } = require('../services/commissionService');
 
 // GET /admin/affiliates  — listado paginado con filtros
 const listAffiliates = async (req, res) => {
@@ -237,6 +238,56 @@ const rejectApplication = async (req, res) => {
     }
 };
 
+// POST /admin/commissions/recalculate
+// Recorre todas las usuarias con `referredBy` seteado y crea Commission para
+// los Payments paid que no la tengan. Idempotente: no duplica.
+const recalculateCommissions = async (req, res) => {
+    try {
+        const referreds = await User.find({ referredBy: { $ne: null } }).select('_id email referredBy').lean();
+        let totalCreated = 0, totalSkipped = 0, processedUsers = 0, errors = 0;
+
+        for (const u of referreds) {
+            try {
+                const r = await backfillCommissionsForUser(u);
+                totalCreated += r.created;
+                totalSkipped += r.skipped;
+                processedUsers += 1;
+            } catch (err) {
+                console.error(`recalc ${u.email}:`, err.message);
+                errors += 1;
+            }
+        }
+
+        // Recalcular `referralStats` agregadas de cada afiliada con base en sus Commissions.
+        const affiliates = await User.find({ partnerLevel: { $gte: 2 } }).select('_id');
+        for (const aff of affiliates) {
+            const agg = await Commission.aggregate([
+                { $match: { affiliate: aff._id } },
+                { $group: {
+                    _id: '$status',
+                    total: { $sum: '$commissionAmountUSD' }
+                } }
+            ]);
+            const totals = { available: 0, pending: 0, paid: 0, voided: 0 };
+            for (const a of agg) totals[a._id] = a.total;
+            const totalEarned = totals.available + totals.pending + totals.paid; // sin voided
+            await User.updateOne({ _id: aff._id }, { $set: {
+                'referralStats.totalEarnedUSD': +totalEarned.toFixed(2),
+                'referralStats.pendingUSD':     +(totals.available + totals.pending).toFixed(2),
+                'referralStats.paidUSD':        +totals.paid.toFixed(2)
+            } });
+        }
+
+        res.json({
+            ok: true,
+            stats: { processedUsers, totalCreated, totalSkipped, errors, affiliatesRecalculated: affiliates.length }
+        });
+    } catch (err) {
+        console.error('recalculateCommissions', err);
+        res.status(500).json({ message: 'Error al recalcular comisiones' });
+    }
+};
+
 module.exports = {
     listAffiliates,
     getAffiliateDetail,
@@ -246,5 +297,6 @@ module.exports = {
     bulkMarkCommissionsPaid,
     listApplications,
     approveApplication,
-    rejectApplication
+    rejectApplication,
+    recalculateCommissions
 };
