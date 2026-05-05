@@ -14,6 +14,29 @@ const getMyAffiliateSummary = async (req, res) => {
 
         const application = await PartnerApplication.findOne({ user: user._id }).sort({ createdAt: -1 });
 
+        // ---- Stats agregadas LIVE (no dependemos de referralStats almacenado, que
+        // puede quedar desfasado si una referida completa perfil sin disparar el contador).
+        const [totalReferred, activeReferred, statusAgg] = await Promise.all([
+            User.countDocuments({ referredBy: user._id }),
+            User.countDocuments({
+                referredBy: user._id,
+                'subscription.status': { $in: ['active', 'trialing', 'past_due'] }
+            }),
+            Commission.aggregate([
+                { $match: { affiliate: user._id } },
+                { $group: { _id: '$status', total: { $sum: '$commissionAmountUSD' } } }
+            ])
+        ]);
+        const byStatus = { available: 0, pending: 0, paid: 0, voided: 0 };
+        for (const s of statusAgg) byStatus[s._id] = s.total;
+        const liveStats = {
+            totalReferred,
+            activeReferred,
+            totalEarnedUSD: +(byStatus.available + byStatus.pending + byStatus.paid).toFixed(2),
+            pendingUSD: +(byStatus.available + byStatus.pending).toFixed(2),
+            paidUSD: +byStatus.paid.toFixed(2)
+        };
+
         // ---- Métricas del mes en curso ----
         const now = new Date();
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -59,7 +82,7 @@ const getMyAffiliateSummary = async (req, res) => {
             avatar: user.avatar,
             partnerLevel: user.partnerLevel,
             partnerActivatedAt: user.partnerActivatedAt,
-            stats: user.referralStats || {},
+            stats: liveStats,
             monthly: {
                 earnedThisMonth: Number(earnedThisMonth.toFixed(2)),
                 projectedThisMonth: Number(projectedThisMonth.toFixed(2)),
