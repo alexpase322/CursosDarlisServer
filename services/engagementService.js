@@ -137,7 +137,12 @@ async function pingActivity(userId) {
         }
     }
 
-    if (newlyUnlocked.length > 0 || updated) {
+    // Auto-fix: si tiene achievements pero el topAchievementTier está vacío
+    // (caso típico al añadir el campo retroactivamente), lo recalculamos.
+    const needsTierBackfill =
+        (user.achievements?.length || 0) > 0 && !user.topAchievementTier;
+
+    if (newlyUnlocked.length > 0 || updated || needsTierBackfill) {
         await refreshTopTier(user);
         await user.save();
         for (const code of newlyUnlocked) notifyUnlock(userId, code);
