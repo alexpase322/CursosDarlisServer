@@ -2,6 +2,9 @@ const Commission = require('../models/Commission');
 const User = require('../models/User');
 const { rates, prices, inferPlan } = require('../config/affiliateConfig');
 const { evaluateAutoPromotion } = require('./levelService');
+const { sendToUser } = require('./pushService');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
 const getSubscriptionIdFromInvoice = (invoice) => {
@@ -134,7 +137,52 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
 
     await evaluateAutoPromotion(affiliate);
 
+    // Notificación a la afiliada (push + email).
+    notifyAffiliateOfCommission(affiliate, referredUser, commissionAmountUSD, plan).catch(e =>
+        console.error('[notifyAffiliateOfCommission]', e.message)
+    );
+
     return commission;
+}
+
+async function notifyAffiliateOfCommission(affiliate, referredUser, amountUSD, plan) {
+    // Push
+    try {
+        await sendToUser(affiliate._id, {
+            title: '💰 Te llegó comisión',
+            body: `${referredUser.username || 'Una alumna'} pagó su plan ${plan}. Ganaste $${amountUSD.toFixed(2)}.`,
+            url: '/afiliada',
+            tag: `commission-${affiliate._id}`
+        });
+    } catch (e) { /* noop */ }
+
+    // Email
+    if (!affiliate.email || !process.env.RESEND_API_KEY) return;
+    try {
+        await resend.emails.send({
+            from: 'Arquitecta <soporte@arquitectadetupropioexito.com>',
+            to: affiliate.email,
+            subject: `💰 Nueva comisión: $${amountUSD.toFixed(2)}`,
+            html: `
+              <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#F7F2EF;padding:32px 16px;color:#1B3854;">
+                <table width="100%" style="max-width:520px;margin:0 auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 8px 24px rgba(27,56,84,0.08);">
+                  <tr><td style="background:linear-gradient(135deg,#905361 0%,#5E2B35 100%);padding:32px;text-align:center;color:#fff;">
+                    <h1 style="margin:0;font-size:24px;">💰 ¡Nueva comisión!</h1>
+                    <p style="margin:8px 0 0;font-size:14px;opacity:0.95;">Hola ${affiliate.username || 'Arquitecta'}, una de tus referidas pagó su suscripción.</p>
+                  </td></tr>
+                  <tr><td style="padding:32px;text-align:center;">
+                    <p style="margin:0;color:#64748b;font-size:13px;text-transform:uppercase;letter-spacing:1px;">Ganaste</p>
+                    <p style="margin:4px 0 0;font-size:48px;font-weight:700;color:#905361;">$${amountUSD.toFixed(2)}</p>
+                    <p style="margin:8px 0 0;color:#475569;font-size:14px;">${referredUser.username || 'Una alumna'} · plan ${plan}</p>
+                    <a href="${process.env.FRONTEND_URL || 'https://arquitectadetupropioexito.com'}/afiliada"
+                       style="display:inline-block;margin-top:24px;padding:12px 28px;background:#905361;color:#fff;font-weight:700;text-decoration:none;border-radius:12px;">
+                      Ver mi panel
+                    </a>
+                  </td></tr>
+                </table>
+              </div>`
+        });
+    } catch (e) { console.error('[email commission]', e.message); }
 }
 
 // Cuando una alumna referida se suscribe por primera vez, sumamos al contador de

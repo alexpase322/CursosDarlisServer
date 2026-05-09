@@ -11,6 +11,10 @@ const notificationRoutes = require('./routes/notification.routes')
 const paymentRoutes = require('./routes/payment.routes');
 const affiliateRoutes = require('./routes/affiliate.routes');
 const adminCrmRoutes = require('./routes/admin.crm.routes');
+const pushRoutes = require('./routes/push.routes');
+const courseProgressRoutes = require('./routes/courseProgress.routes');
+const quizRoutes = require('./routes/quiz.routes');
+const leaderboardRoutes = require('./routes/leaderboard.routes');
 const { stripeWebhook } = require('./controllers/payment.controller');
 const { ensureStripeWebhook } = require('./services/stripeWebhookSetup');
 const http = require('http'); 
@@ -94,6 +98,10 @@ app.use('/notifications', notificationRoutes);
 app.use('/payment', paymentRoutes);
 app.use('/affiliate', affiliateRoutes);
 app.use('/admin', adminCrmRoutes);
+app.use('/push', pushRoutes);
+app.use('/courses', courseProgressRoutes);
+app.use('/quizzes', quizRoutes);
+app.use('/leaderboard', leaderboardRoutes);
 
 app.get('/', (req, res) => {
     res.send('API de Plataforma de Cursos funcionando...');

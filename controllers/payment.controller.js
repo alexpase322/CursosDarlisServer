@@ -9,6 +9,9 @@ const {
 } = require('../services/commissionService');
 const { inferPlan } = require('../config/affiliateConfig');
 const { sendInvitation } = require('../services/invitationService');
+const { sendToAdmins } = require('../services/pushService');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // 1. Crear Sesión de Checkout (Redirige al usuario a Stripe)
 const createCheckoutSession = async (req, res) => {
@@ -216,15 +219,79 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     await registerPaymentFromInvoice(invoice, user);
 
     // Auto-invite también para renovaciones (idempotente: no spammea si ya se envió).
+    let isFirstPayment = false;
     if (email && user && !user.invitationSentAt) {
+        isFirstPayment = true;
         try {
             const r = await sendInvitation({ email, role: 'user', mode: 'auto' });
             console.log(`[auto-invite] ${email} → ${r.reason}`);
         } catch (err) {
             console.error('[auto-invite] error:', err.message);
         }
+    } else {
+        // Detectar si es la PRIMERA invoice de esta suscripción (subscription_create)
+        // para notificar admins solo en suscripciones nuevas (no renovaciones).
+        isFirstPayment = invoice.billing_reason === 'subscription_create';
+    }
+
+    if (isFirstPayment) {
+        notifyAdminsOfNewSubscription(user, invoice).catch(e =>
+            console.error('[notifyAdmins newSub]', e.message)
+        );
     }
 };
+
+async function notifyAdminsOfNewSubscription(user, invoice) {
+    const userName = user?.username || invoice.customer_email || 'Nueva alumna';
+    const userEmail = user?.email || invoice.customer_email || '';
+    const amount = invoice.amount_paid != null ? (invoice.amount_paid / 100) : 0;
+
+    // Push a todos los admins.
+    try {
+        await sendToAdmins({
+            title: '🎉 Nueva suscripción',
+            body: `${userName} se suscribió por $${amount.toFixed(2)}`,
+            url: '/admin/suscripciones',
+            tag: 'new-sub'
+        });
+    } catch (e) { /* noop */ }
+
+    // Email a admins.
+    if (!process.env.RESEND_API_KEY) return;
+    try {
+        const admins = await User.find({ role: 'admin' }).select('email').lean();
+        const emails = admins.map(a => a.email).filter(Boolean);
+        if (!emails.length) return;
+        await resend.emails.send({
+            from: 'Arquitecta <soporte@arquitectadetupropioexito.com>',
+            to: emails,
+            subject: `🎉 Nueva alumna suscrita: ${userName}`,
+            html: `
+              <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#F7F2EF;padding:32px 16px;color:#1B3854;">
+                <table width="100%" style="max-width:520px;margin:0 auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 8px 24px rgba(27,56,84,0.08);">
+                  <tr><td style="background:linear-gradient(135deg,#1B3854 0%,#0d1f30 100%);padding:32px;text-align:center;color:#fff;">
+                    <h1 style="margin:0;font-size:24px;">🎉 Una arquitecta más</h1>
+                    <p style="margin:8px 0 0;font-size:14px;opacity:0.95;">Acaba de entrar una alumna nueva.</p>
+                  </td></tr>
+                  <tr><td style="padding:28px;">
+                    <p style="margin:0 0 4px;font-size:13px;color:#64748b;">Alumna</p>
+                    <p style="margin:0 0 16px;font-size:18px;font-weight:700;">${userName}</p>
+                    <p style="margin:0 0 4px;font-size:13px;color:#64748b;">Email</p>
+                    <p style="margin:0 0 16px;font-size:14px;color:#475569;">${userEmail}</p>
+                    <p style="margin:0 0 4px;font-size:13px;color:#64748b;">Monto</p>
+                    <p style="margin:0;font-size:24px;font-weight:700;color:#10b981;">$${amount.toFixed(2)}</p>
+                  </td></tr>
+                  <tr><td style="padding:0 28px 28px;text-align:center;">
+                    <a href="${process.env.FRONTEND_URL || 'https://arquitectadetupropioexito.com'}/admin/suscripciones"
+                       style="display:inline-block;padding:12px 28px;background:#905361;color:#fff;font-weight:700;text-decoration:none;border-radius:12px;">
+                      Ver en panel admin
+                    </a>
+                  </td></tr>
+                </table>
+              </div>`
+        });
+    } catch (e) { console.error('[email admin newSub]', e.message); }
+}
 
 // Lee el subscriptionId de un invoice de Stripe, cubriendo API antigua y nueva.
 // API ≤ 2024: invoice.subscription
