@@ -22,6 +22,19 @@ const userSchema = new mongoose.Schema({
     invitationToken: { type: String },
     invitationSentAt: { type: Date, default: null },
     resetPasswordToken: { type: String },
+
+    // --- Engagement / racha ---
+    lastActiveAt: { type: Date, default: null },
+    currentStreak: { type: Number, default: 0 },
+    longestStreak: { type: Number, default: 0 },
+    streakLastIncrementDay: { type: String, default: null }, // 'YYYY-MM-DD' (UTC) para idempotencia
+    achievements: [{
+        code: { type: String },          // ej: 'first_login', 'streak_7', 'course_completed', 'first_referral'
+        unlockedAt: { type: Date, default: Date.now },
+        meta: { type: mongoose.Schema.Types.Mixed }
+    }],
+    lastReminderSentAt: { type: Date, default: null },
+    lastReminderType: { type: String, default: null },
     resetPasswordExpire: { type: Date },
     subscription: {
         id: String,

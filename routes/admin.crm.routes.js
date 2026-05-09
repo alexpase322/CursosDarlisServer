@@ -16,6 +16,7 @@ const {
 const { syncPayments } = require('../controllers/stripe.sync.controller');
 const { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayments } = require('../controllers/admin.subscriptions.controller');
 const { getMonthlyRevenue } = require('../controllers/admin.revenue.controller');
+const { getKpis } = require('../controllers/admin.kpis.controller');
 
 router.use(protect, admin);
 
@@ -39,5 +40,7 @@ router.post('/subscriptions/:userId/manual-payment', registerManualPayment);
 router.post('/subscriptions/backfill-from-payments', backfillSubscriptionsFromPayments);
 
 router.get('/revenue/monthly', getMonthlyRevenue);
+
+router.get('/kpis', getKpis);
 
 module.exports = router;

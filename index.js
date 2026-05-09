@@ -15,8 +15,11 @@ const pushRoutes = require('./routes/push.routes');
 const courseProgressRoutes = require('./routes/courseProgress.routes');
 const quizRoutes = require('./routes/quiz.routes');
 const leaderboardRoutes = require('./routes/leaderboard.routes');
+const engagementRoutes = require('./routes/engagement.routes');
 const { stripeWebhook } = require('./controllers/payment.controller');
 const { ensureStripeWebhook } = require('./services/stripeWebhookSetup');
+const { runReminderJob } = require('./services/reminderService');
+const cron = require('node-cron');
 const http = require('http'); 
 const { Server } = require('socket.io'); 
 
@@ -102,6 +105,7 @@ app.use('/push', pushRoutes);
 app.use('/courses', courseProgressRoutes);
 app.use('/quizzes', quizRoutes);
 app.use('/leaderboard', leaderboardRoutes);
+app.use('/engagement', engagementRoutes);
 
 app.get('/', (req, res) => {
     res.send('API de Plataforma de Cursos funcionando...');
@@ -113,4 +117,12 @@ server.listen(PORT, () => {
     // Asegura que el webhook de Stripe esté registrado con todos los eventos.
     // No bloquea el arranque si falla.
     ensureStripeWebhook().catch(err => console.error('[stripe-webhook-setup] uncaught:', err));
+
+    // Cron diario de recordatorios — corre todos los días a las 14:00 UTC (9am COL).
+    if (process.env.DISABLE_REMINDER_CRON !== '1') {
+        cron.schedule('0 14 * * *', () => {
+            runReminderJob().catch(err => console.error('[reminders] cron error:', err.message));
+        }, { timezone: 'UTC' });
+        console.log('🕐 Cron de recordatorios programado (14:00 UTC diario).');
+    }
 });

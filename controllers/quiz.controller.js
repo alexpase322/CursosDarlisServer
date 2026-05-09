@@ -1,6 +1,7 @@
 const Quiz = require('../models/Quiz');
 const QuizAttempt = require('../models/QuizAttempt');
 const Course = require('../models/Course');
+const { unlockAchievement } = require('../services/engagementService');
 
 // ====== ALUMNA ======
 
@@ -72,6 +73,10 @@ const submitAttempt = async (req, res) => {
             scorePercent,
             passed
         });
+
+        if (passed) {
+            unlockAchievement(req.user._id, 'course_completed', { course: quiz.course }).catch(() => {});
+        }
 
         // Devolvemos respuestas correctas para feedback inmediato.
         const reveal = quiz.questions.map(q => ({

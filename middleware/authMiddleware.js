@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { pingActivity } = require('../services/engagementService');
 
 // 1. Proteger rutas (Verificar que esté logueado)
 const protect = async (req, res, next) => {
@@ -16,6 +17,11 @@ const protect = async (req, res, next) => {
             // Buscar el usuario en la BD y agregarlo a la request (req.user)
             // .select('-password') quita la contraseña de los datos devueltos
             req.user = await User.findById(decoded.id).select('-password');
+
+            // Ping de engagement (no bloquea — fire and forget).
+            if (req.user) {
+                pingActivity(req.user._id).catch(err => console.error('[ping]', err.message));
+            }
 
             next(); // Continuar a la siguiente función
         } catch (error) {

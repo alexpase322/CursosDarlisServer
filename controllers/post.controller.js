@@ -3,6 +3,7 @@ const cloudinary = require('../config/cloudinary');
 const fs = require('fs');
 // IMPORTAMOS EL HELPER DE NOTIFICACIONES
 const { createNotificationInternal } = require('./notification.controller');
+const { unlockAchievement } = require('../services/engagementService');
 
 // 1. Obtener todos los posts (El Feed)
 const getPosts = async (req, res) => {
@@ -42,6 +43,8 @@ const createPost = async (req, res) => {
 
         const savedPost = await newPost.save();
         await savedPost.populate('author', 'username avatar role');
+
+        unlockAchievement(req.user._id, 'first_post').catch(() => {});
 
         res.status(201).json(savedPost);
     } catch (error) {
@@ -142,4 +145,45 @@ const deletePost = async (req, res) => {
     }
 };
 
-module.exports = { getPosts, createPost, toggleLike, addComment, deletePost };
+// Toggle de reacción tipada (heart/fire/muscle/clap/sparkles).
+// Una alumna solo puede tener UNA reacción por post (la que toque cambia o quita).
+const toggleReaction = async (req, res) => {
+    try {
+        const { id, type } = req.params;
+        const ALLOWED = ['heart', 'fire', 'muscle', 'clap', 'sparkles'];
+        if (!ALLOWED.includes(type)) {
+            return res.status(400).json({ message: 'Reacción inválida' });
+        }
+        const post = await Post.findById(id);
+        if (!post) return res.status(404).json({ message: 'Post no encontrado' });
+
+        post.reactions = post.reactions || [];
+        const myIdx = post.reactions.findIndex(r => r.user.toString() === req.user._id.toString());
+
+        if (myIdx >= 0) {
+            const current = post.reactions[myIdx];
+            if (current.type === type) {
+                // Misma reacción → toggle off
+                post.reactions.splice(myIdx, 1);
+            } else {
+                // Cambiar a otra
+                current.type = type;
+                current.createdAt = new Date();
+            }
+        } else {
+            post.reactions.push({ user: req.user._id, type, createdAt: new Date() });
+        }
+
+        await post.save();
+        res.json({
+            reactions: post.reactions,
+            counts: post.reactions.reduce((acc, r) => { acc[r.type] = (acc[r.type] || 0) + 1; return acc; }, {}),
+            myReaction: post.reactions.find(r => r.user.toString() === req.user._id.toString())?.type || null
+        });
+    } catch (err) {
+        console.error('toggleReaction', err);
+        res.status(500).json({ message: 'Error al reaccionar' });
+    }
+};
+
+module.exports = { getPosts, createPost, toggleLike, addComment, deletePost, toggleReaction };
