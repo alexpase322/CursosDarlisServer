@@ -3,15 +3,15 @@ const cloudinary = require('../config/cloudinary');
 const fs = require('fs');
 // IMPORTAMOS EL HELPER DE NOTIFICACIONES
 const { createNotificationInternal } = require('./notification.controller');
-const { unlockAchievement } = require('../services/engagementService');
+const { unlockAchievement, evaluateMilestones } = require('../services/engagementService');
 
 // 1. Obtener todos los posts (El Feed)
 const getPosts = async (req, res) => {
     try {
         const posts = await Post.find()
             .sort({ createdAt: -1 })
-            .populate('author', 'username avatar role')
-            .populate('comments.user', 'username avatar');
+            .populate('author', 'username avatar role partnerLevel topAchievementTier topAchievementCode')
+            .populate('comments.user', 'username avatar topAchievementTier');
 
         res.json(posts);
     } catch (error) {
@@ -42,9 +42,9 @@ const createPost = async (req, res) => {
         });
 
         const savedPost = await newPost.save();
-        await savedPost.populate('author', 'username avatar role');
+        await savedPost.populate('author', 'username avatar role partnerLevel topAchievementTier topAchievementCode');
 
-        unlockAchievement(req.user._id, 'first_post').catch(() => {});
+        evaluateMilestones(req.user._id).catch(() => {});
 
         res.status(201).json(savedPost);
     } catch (error) {
@@ -104,7 +104,9 @@ const addComment = async (req, res) => {
 
         post.comments.push(newComment);
         await post.save();
-        
+
+        evaluateMilestones(req.user._id).catch(() => {});
+
         // ---> NOTIFICACIÓN <---
         const io = req.app.get('socketio');
         if (io) {

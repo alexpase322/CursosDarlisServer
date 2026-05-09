@@ -89,7 +89,11 @@ const getProfile = async (req, res) => {
         bio: req.user.bio,
         partnerLevel: req.user.partnerLevel || 1,
         partnerActivatedAt: req.user.partnerActivatedAt,
-        subscription: req.user.subscription
+        subscription: req.user.subscription,
+        topAchievementTier: req.user.topAchievementTier || null,
+        topAchievementCode: req.user.topAchievementCode || null,
+        currentStreak: req.user.currentStreak || 0,
+        longestStreak: req.user.longestStreak || 0
     }
     res.status(200).json(user);
 };

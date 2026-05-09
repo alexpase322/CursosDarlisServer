@@ -3,7 +3,7 @@ const User = require('../models/User');
 const { rates, prices, inferPlan } = require('../config/affiliateConfig');
 const { evaluateAutoPromotion } = require('./levelService');
 const { sendToUser } = require('./pushService');
-const { unlockAchievement } = require('./engagementService');
+const { unlockAchievement, evaluateMilestones } = require('./engagementService');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -143,8 +143,8 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
         console.error('[notifyAffiliateOfCommission]', e.message)
     );
 
-    // Logros por hito de comisión.
-    unlockAchievement(affiliate._id, 'first_commission').catch(() => {});
+    // Logros por hito de comisión (recalcula milestones acumulativos).
+    evaluateMilestones(affiliate._id).catch(() => {});
 
     return commission;
 }
@@ -203,11 +203,8 @@ async function onReferredSubscriptionActivated(referredUser) {
 
     await evaluateAutoPromotion(affiliate);
 
-    // Logros por referidas.
-    unlockAchievement(affiliate._id, 'first_referral').catch(() => {});
-    if ((affiliate.referralStats.totalReferred || 0) >= 10) {
-        unlockAchievement(affiliate._id, 'ten_referrals').catch(() => {});
-    }
+    // Recalcula todos los milestones de referidas.
+    evaluateMilestones(affiliate._id).catch(() => {});
 }
 
 async function onReferredSubscriptionCanceled(referredUser) {

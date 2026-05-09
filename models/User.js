@@ -33,6 +33,11 @@ const userSchema = new mongoose.Schema({
         unlockedAt: { type: Date, default: Date.now },
         meta: { type: mongoose.Schema.Types.Mixed }
     }],
+    topAchievementTier: { type: String, enum: ['bronze', 'silver', 'gold', 'diamond'], default: null },
+    topAchievementCode: { type: String, default: null }, // código del logro de mayor tier (para badge text)
+    earlyLoginCount: { type: Number, default: 0 },       // pings antes de las 7am
+    lateLoginCount: { type: Number, default: 0 },        // pings después de las 11pm
+    weekDaysSet: { type: [String], default: [] },        // 'YYYY-WW-N' para detectar full_week
     lastReminderSentAt: { type: Date, default: null },
     lastReminderType: { type: String, default: null },
     resetPasswordExpire: { type: Date },

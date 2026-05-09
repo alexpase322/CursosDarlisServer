@@ -15,6 +15,10 @@ async function evaluateAutoPromotion(user) {
     ) {
         user.partnerLevel = 3;
         await user.save();
+        try {
+            const { evaluateMilestones } = require('./engagementService');
+            evaluateMilestones(user._id).catch(() => {});
+        } catch { /* noop */ }
     }
 
     return user;
@@ -34,6 +38,13 @@ async function setLevelManually(userId, newLevel) {
         user.partnerActivatedAt = new Date();
     }
     await user.save();
+
+    // Disparar milestones de partner_activated / partner_n3 / partner_n4.
+    try {
+        const { evaluateMilestones } = require('./engagementService');
+        evaluateMilestones(user._id).catch(() => {});
+    } catch { /* noop */ }
+
     return user;
 }
 
