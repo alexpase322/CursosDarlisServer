@@ -29,16 +29,40 @@ function isoWeekDayKey(date = new Date()) {
 // Mapa de orden de tiers para comparar.
 const tierRank = (t) => (t && TIERS[t]?.rank) || 0;
 
-// Calcula el código + tier más alto desbloqueado.
-function computeTopTier(userAchievements = []) {
-    let topCode = null, topTier = null, topRank = 0;
+// Umbral mínimo de logros DE UN MISMO TIER para alcanzar ese tier.
+// Ej: 3 logros bronze desbloqueados → tier bronze. 3 silver → silver. Etc.
+const TIER_THRESHOLD = 3;
+const TIER_ORDER = ['bronze', 'silver', 'gold', 'diamond'];
+
+// Cuenta logros desbloqueados por tier.
+function countByTier(userAchievements = []) {
+    const counts = { bronze: 0, silver: 0, gold: 0, diamond: 0 };
     for (const ua of userAchievements) {
         const def = achievements[ua.code];
-        if (!def) continue;
-        const rank = tierRank(def.tier);
-        if (rank > topRank) { topRank = rank; topTier = def.tier; topCode = ua.code; }
+        if (def && def.tier && counts[def.tier] !== undefined) {
+            counts[def.tier] += 1;
+        }
     }
-    return { topTier, topCode };
+    return counts;
+}
+
+// El tier más alto que la usuaria ha "ganado" (tiene ≥ TIER_THRESHOLD logros de él).
+// Si no llega al umbral en ningún tier → null (sin marco).
+function computeTopTier(userAchievements = []) {
+    const counts = countByTier(userAchievements);
+    let topTier = null;
+    for (const t of TIER_ORDER) {
+        if (counts[t] >= TIER_THRESHOLD) topTier = t;
+    }
+    // Pick a representative achievement code de ese tier (el más reciente).
+    let topCode = null;
+    if (topTier) {
+        const ofTier = userAchievements
+            .filter(ua => achievements[ua.code]?.tier === topTier)
+            .sort((a, b) => new Date(b.unlockedAt) - new Date(a.unlockedAt));
+        topCode = ofTier[0]?.code || null;
+    }
+    return { topTier, topCode, counts };
 }
 
 async function refreshTopTier(user) {
@@ -249,17 +273,38 @@ async function evaluateMilestones(userId) {
     return newlyUnlocked;
 }
 
-// POST /admin/achievements/recalculate-all  — escanea TODAS las usuarias y desbloquea
-// los logros que les correspondan según su data actual. Útil tras añadir nuevos.
+// POST /admin/achievements/recalculate-all  — escanea TODAS las usuarias y:
+//   1) desbloquea los logros que les correspondan según su data actual
+//   2) recalcula el topAchievementTier con la regla actual (≥3 logros por tier)
 async function recalculateAllUsers() {
     const users = await User.find({ role: { $ne: 'admin' } }).select('_id').lean();
-    let processed = 0, totalUnlocked = 0;
+    let processed = 0, totalUnlocked = 0, tierChanged = 0, tierCleared = 0, tierUpgraded = 0;
+
     for (const u of users) {
-        const r = await evaluateMilestones(u._id);
-        if (r) totalUnlocked += r.length;
+        // Paso 1: evaluar y desbloquear nuevos logros
+        const newlyUnlocked = await evaluateMilestones(u._id);
+        if (newlyUnlocked) totalUnlocked += newlyUnlocked.length;
+
+        // Paso 2: forzar refresh del tier (incluso sin nuevos logros, porque la regla
+        // de promoción cambió y el tier almacenado puede estar desfasado).
+        const user = await User.findById(u._id).select(
+            'achievements topAchievementTier topAchievementCode'
+        );
+        if (!user) continue;
+        const previousTier = user.topAchievementTier || null;
+        await refreshTopTier(user);
+        if (user.topAchievementTier !== previousTier) {
+            tierChanged += 1;
+            if (!user.topAchievementTier && previousTier) tierCleared += 1;
+            else if (
+                tierRank(user.topAchievementTier) > tierRank(previousTier)
+            ) tierUpgraded += 1;
+            await user.save();
+        }
         processed += 1;
     }
-    return { processed, totalUnlocked };
+
+    return { processed, totalUnlocked, tierChanged, tierCleared, tierUpgraded };
 }
 
 module.exports = {

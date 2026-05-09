@@ -1,6 +1,10 @@
 const User = require('../models/User');
 const { achievements, TIERS } = require('../config/achievementsConfig');
-const { recalculateAllUsers } = require('../services/engagementService');
+const { recalculateAllUsers, computeTopTier } = require('../services/engagementService');
+
+// Umbral de logros por tier para promocionar (debe coincidir con engagementService).
+const TIER_THRESHOLD = 3;
+const TIER_ORDER = ['bronze', 'silver', 'gold', 'diamond'];
 
 // GET /engagement/me  → racha + logros desbloqueados + bloqueados + tier top
 const getMyEngagement = async (req, res) => {
@@ -26,6 +30,21 @@ const getMyEngagement = async (req, res) => {
 
         const topDef = user.topAchievementCode ? achievements[user.topAchievementCode] : null;
 
+        // Progreso por tier — cuántos logros desbloqueó vs requeridos para alcanzarlo.
+        const { counts } = computeTopTier(user.achievements);
+        const totalsByTier = TIER_ORDER.reduce((acc, t) => {
+            acc[t] = Object.values(achievements).filter(a => a.tier === t).length;
+            return acc;
+        }, {});
+        const tierProgress = TIER_ORDER.map(t => ({
+            tier: t,
+            unlocked: counts[t] || 0,
+            required: TIER_THRESHOLD,
+            available: totalsByTier[t] || 0,
+            achieved: (counts[t] || 0) >= TIER_THRESHOLD,
+            isCurrent: user.topAchievementTier === t
+        }));
+
         res.json({
             currentStreak: user.currentStreak || 0,
             longestStreak: user.longestStreak || 0,
@@ -34,6 +53,8 @@ const getMyEngagement = async (req, res) => {
             topAchievementCode: user.topAchievementCode || null,
             topAchievement: topDef ? { code: user.topAchievementCode, ...topDef } : null,
             tiers: TIERS,
+            tierThreshold: TIER_THRESHOLD,
+            tierProgress,
             achievements: all,
             summary: {
                 unlockedCount: all.filter(a => a.unlocked).length,
