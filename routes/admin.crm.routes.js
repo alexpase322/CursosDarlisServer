@@ -18,6 +18,7 @@ const { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayme
 const { getMonthlyRevenue } = require('../controllers/admin.revenue.controller');
 const { getKpis } = require('../controllers/admin.kpis.controller');
 const { recalculateAllAchievements } = require('../controllers/engagement.controller');
+const { listPayments, diagnose } = require('../controllers/admin.payments.controller');
 
 router.use(protect, admin);
 
@@ -44,5 +45,8 @@ router.get('/revenue/monthly', getMonthlyRevenue);
 
 router.get('/kpis', getKpis);
 router.post('/achievements/recalculate-all', recalculateAllAchievements);
+
+router.get('/payments', listPayments);
+router.get('/payments/diagnose', diagnose);
 
 module.exports = router;
