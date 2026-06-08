@@ -30,6 +30,7 @@ const getSubscriptionIdFromInvoice = (invoice) => {
 // no la tienen. Pensado para backfillear cuando la atribución de referidora
 // se setea DESPUÉS del pago (caso típico: pago Stripe → webhook → User creado
 // sin referredBy → alumna entra al setup-account y elige referidora).
+// Procesa TANTO pagos de Stripe como pagos manuales (`manual_*`).
 async function backfillCommissionsForUser(referredUser) {
     if (!referredUser || !referredUser.referredBy) return { created: 0, skipped: 0 };
 
@@ -43,7 +44,7 @@ async function backfillCommissionsForUser(referredUser) {
         email,
         status: 'paid',
         amountUSD: { $gt: 0 },
-        stripeInvoiceId: { $not: /^manual_|^trial_/ }
+        stripeInvoiceId: { $not: /^trial_/ } // trials no generan comisión (son $0)
     }).lean();
 
     let created = 0, skipped = 0;
@@ -51,6 +52,13 @@ async function backfillCommissionsForUser(referredUser) {
         const exists = await Commission.findOne({ stripeInvoiceId: p.stripeInvoiceId });
         if (exists) { skipped += 1; continue; }
         try {
+            // Pago manual → flujo dedicado (no consultamos Stripe).
+            if (p.stripeInvoiceId.startsWith('manual_')) {
+                const c = await recordCommissionFromManualPayment(p);
+                if (c) created += 1; else skipped += 1;
+                continue;
+            }
+            // Pago Stripe normal → recuperar invoice y procesar.
             const invoice = await stripe.invoices.retrieve(p.stripeInvoiceId);
             const c = await recordCommissionFromInvoice(invoice);
             if (c) created += 1; else skipped += 1;
@@ -60,6 +68,73 @@ async function backfillCommissionsForUser(referredUser) {
         }
     }
     return { created, skipped };
+}
+
+// Crea Commission a partir de un Payment manual (transferencia, beacons, etc.).
+// Idempotente por stripeInvoiceId (el ID sintético `manual_<userId>_<ts>`).
+async function recordCommissionFromManualPayment(payment) {
+    if (!payment || !payment.stripeInvoiceId) return null;
+    if (!payment.stripeInvoiceId.startsWith('manual_')) return null;
+    if (payment.status !== 'paid') return null;
+    if (!payment.amountUSD || payment.amountUSD <= 0) return null;
+
+    const existing = await Commission.findOne({ stripeInvoiceId: payment.stripeInvoiceId });
+    if (existing) return existing;
+
+    // Resolver al usuario referido por email (case-insensitive).
+    const email = (payment.email || '').toLowerCase().trim();
+    if (!email) return null;
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const referredUser = await User.findOne({
+        email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' }
+    });
+    if (!referredUser || !referredUser.referredBy) return null;
+
+    const affiliate = await User.findById(referredUser.referredBy);
+    if (!affiliate) return null;
+
+    const plan = payment.plan || 'monthly';
+    if (!rates[plan]) {
+        console.warn(`[commissions manual] plan ${plan} no tiene rate definido; skip ${payment.stripeInvoiceId}`);
+        return null;
+    }
+    const commissionPercent = rates[plan] * 100;
+    const commissionAmountUSD = +(payment.amountUSD * rates[plan]).toFixed(2);
+
+    let commission;
+    try {
+        commission = await Commission.create({
+            affiliate: affiliate._id,
+            referredUser: referredUser._id,
+            stripeInvoiceId: payment.stripeInvoiceId,
+            stripeSubscriptionId: payment.stripeSubscriptionId || null,
+            plan,
+            grossAmountUSD: payment.amountUSD,
+            commissionPercent,
+            commissionAmountUSD,
+            periodStart: payment.paidAt || null,
+            periodEnd: null,
+            status: 'available'
+        });
+    } catch (err) {
+        if (err.code === 11000) return await Commission.findOne({ stripeInvoiceId: payment.stripeInvoiceId });
+        throw err;
+    }
+
+    affiliate.referralStats = affiliate.referralStats || {};
+    affiliate.referralStats.totalEarnedUSD = (affiliate.referralStats.totalEarnedUSD || 0) + commissionAmountUSD;
+    affiliate.referralStats.pendingUSD = (affiliate.referralStats.pendingUSD || 0) + commissionAmountUSD;
+    await affiliate.save();
+
+    await evaluateAutoPromotion(affiliate);
+
+    // Notificar a la afiliada + milestones.
+    notifyAffiliateOfCommission(affiliate, referredUser, commissionAmountUSD, plan).catch(e =>
+        console.error('[notifyAffiliateOfCommission manual]', e.message)
+    );
+    evaluateMilestones(affiliate._id).catch(() => {});
+
+    return commission;
 }
 
 async function recordCommissionFromInvoice(invoice, opts = {}) {
@@ -246,6 +321,7 @@ async function voidCommissionByInvoiceId(invoiceId) {
 
 module.exports = {
     recordCommissionFromInvoice,
+    recordCommissionFromManualPayment,
     backfillCommissionsForUser,
     onReferredSubscriptionActivated,
     onReferredSubscriptionCanceled,

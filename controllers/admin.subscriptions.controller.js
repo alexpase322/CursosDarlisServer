@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Payment = require('../models/Payment');
+const { recordCommissionFromManualPayment } = require('../services/commissionService');
 
 // GET /admin/subscriptions
 // Lista usuarios (rol != admin) con su info de suscripción y último pago.
@@ -146,9 +147,24 @@ const registerManualPayment = async (req, res) => {
             await user.save();
         }
 
+        // Si la alumna tiene referidora, generar comisión del pago manual.
+        let commission = null;
+        if (amt > 0 && user.referredBy) {
+            try {
+                commission = await recordCommissionFromManualPayment(payment);
+            } catch (commErr) {
+                console.error('[manual commission]', commErr.message);
+            }
+        }
+
         res.json({
             ok: true,
             payment,
+            commission: commission ? {
+                _id: commission._id,
+                amountUSD: commission.commissionAmountUSD,
+                affiliate: commission.affiliate
+            } : null,
             user: { _id: user._id, subscription: user.subscription },
             meta: { method, note }
         });
