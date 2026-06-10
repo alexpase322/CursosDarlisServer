@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const { recordCommissionFromManualPayment } = require('../services/commissionService');
+const { checkExpiredManualSubs } = require('../services/manualSubsService');
 
 // GET /admin/subscriptions
 // Lista usuarios (rol != admin) con su info de suscripción y último pago.
@@ -66,8 +67,26 @@ const listSubscriptions = async (req, res) => {
         ]);
         const paymentsByEmail = new Map(lastPayments.map(p => [p._id, p]));
 
+        const now = new Date();
         const items = users.map(u => {
             const p = paymentsByEmail.get((u.email || '').toLowerCase().trim()) || {};
+
+            // Metadatos calculados para suscripciones (especialmente manuales).
+            let isManual = false;
+            let daysOverdue = 0;
+            let isOverdue = false;
+            const sub = u.subscription || null;
+            if (sub) {
+                isManual = typeof sub.id === 'string' && sub.id.startsWith('manual_');
+                if (sub.currentPeriodEnd) {
+                    const end = new Date(sub.currentPeriodEnd);
+                    if (end < now) {
+                        isOverdue = true;
+                        daysOverdue = Math.floor((now - end) / (1000 * 60 * 60 * 24));
+                    }
+                }
+            }
+
             return {
                 _id: u._id,
                 username: u.username,
@@ -76,7 +95,8 @@ const listSubscriptions = async (req, res) => {
                 userStatus: u.status,
                 partnerLevel: u.partnerLevel,
                 createdAt: u.createdAt,
-                subscription: u.subscription || null,
+                subscription: sub,
+                subscriptionMeta: { isManual, isOverdue, daysOverdue },
                 lastPayment: p.lastPaidAt
                     ? { paidAt: p.lastPaidAt, amountUSD: p.lastAmountUSD, status: p.lastStatus, plan: p.lastPlan, failureReason: p.lastFailureReason || null }
                     : null,
@@ -381,6 +401,8 @@ const backfillSubscriptionsFromPayments = async (req, res) => {
             statusFlippedToPaid: 0,
             statusFlippedToRefunded: 0,
             subscriptionsUpdated: 0,
+            manualPastDue: 0,
+            manualCanceled: 0,
             noEmail: 0,
             noCustomer: 0,
             errors: 0
@@ -392,6 +414,15 @@ const backfillSubscriptionsFromPayments = async (req, res) => {
         const log = (...a) => console.log('[reconcile]', ...a);
         for (const u of candidates) {
             await reconcileOneUser(u, stats, log);
+        }
+
+        // También verificamos subs manuales que ya vencieron.
+        try {
+            const ms = await checkExpiredManualSubs({ log });
+            stats.manualPastDue = ms.movedToPastDue;
+            stats.manualCanceled = ms.movedToCanceled;
+        } catch (e) {
+            log('manual subs check error:', e.message);
         }
 
         res.json({ ok: true, stats });

@@ -20,6 +20,7 @@ const webinarRoutes = require('./routes/webinar.routes');
 const { stripeWebhook } = require('./controllers/payment.controller');
 const { ensureStripeWebhook } = require('./services/stripeWebhookSetup');
 const { runReminderJob } = require('./services/reminderService');
+const { checkExpiredManualSubs } = require('./services/manualSubsService');
 const cron = require('node-cron');
 const http = require('http'); 
 const { Server } = require('socket.io'); 
@@ -127,4 +128,13 @@ server.listen(PORT, () => {
         }, { timezone: 'UTC' });
         console.log('🕐 Cron de recordatorios programado (14:00 UTC diario).');
     }
+
+    // Cron diario de subs manuales — corre a las 13:00 UTC (8am COL) antes de los reminders.
+    cron.schedule('0 13 * * *', () => {
+        checkExpiredManualSubs().catch(err => console.error('[manual-subs] cron error:', err.message));
+    }, { timezone: 'UTC' });
+    console.log('🕐 Cron de subs manuales programado (13:00 UTC diario).');
+
+    // Corrida inmediata al arranque para no esperar 24h.
+    checkExpiredManualSubs().catch(err => console.error('[manual-subs] startup error:', err.message));
 });
