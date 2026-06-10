@@ -10,6 +10,7 @@ const {
 const { inferPlan } = require('../config/affiliateConfig');
 const { sendInvitation } = require('../services/invitationService');
 const { sendToAdmins } = require('../services/pushService');
+const { getQuarterlyPromo } = require('../services/promoService');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -116,11 +117,41 @@ const handleCheckoutSuccess = async (session) => {
     const subscriptionId = session.subscription;
     if (!subscriptionId) return;
 
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    let subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const subItem = subscription.items.data[0];
     const priceId = subItem?.price?.id;
     const subAmountUSD = subItem?.price?.unit_amount != null ? subItem.price.unit_amount / 100 : null;
     const plan = inferPlan({ priceId, lineItem: subItem, amountUSD: subAmountUSD });
+
+    // ─── Aplicar promo trimestral si está activa ───
+    // Mecánica: el cliente paga el cobro normal en el checkout. Después extendemos
+    // el currentPeriodEnd del sub en Stripe N meses (vía `trial_end`) para que el
+    // próximo cobro caiga N meses más tarde. Después de eso el ciclo trimestral
+    // se reanuda normalmente.
+    let promoApplied = null;
+    try {
+        if (plan === 'quarterly') {
+            const promo = await getQuarterlyPromo();
+            if (promo.enabled && promo.extraMonths > 0) {
+                const currentEndMs = subscription.current_period_end * 1000;
+                const newEnd = new Date(currentEndMs);
+                newEnd.setMonth(newEnd.getMonth() + promo.extraMonths);
+                const newEndUnix = Math.floor(newEnd.getTime() / 1000);
+
+                subscription = await stripe.subscriptions.update(subscriptionId, {
+                    trial_end: newEndUnix,
+                    proration_behavior: 'none'
+                });
+                promoApplied = {
+                    extraMonths: promo.extraMonths,
+                    newCurrentPeriodEnd: newEnd
+                };
+                console.log(`[checkout] PROMO aplicada · +${promo.extraMonths} mes(es) a sub ${subscriptionId}`);
+            }
+        }
+    } catch (promoErr) {
+        console.error('[checkout promo] error:', promoErr.message);
+    }
 
     let user = null;
     if (userId) {
@@ -141,15 +172,17 @@ const handleCheckoutSuccess = async (session) => {
         customerId: session.customer,
         status: subscription.status,
         plan: plan || user.subscription?.plan,
-        currentPeriodEnd: new Date(subscription.current_period_end * 1000)
+        currentPeriodEnd: promoApplied
+            ? promoApplied.newCurrentPeriodEnd
+            : new Date(subscription.current_period_end * 1000)
     };
     await user.save();
 
-    if (wasInactive && subscription.status === 'active') {
+    if (wasInactive && (subscription.status === 'active' || subscription.status === 'trialing')) {
         await onReferredSubscriptionActivated(user);
     }
 
-    console.log(`[checkout] Usuario ${user._id} suscrito (${plan || 'plan?'}). Estado: ${subscription.status}`);
+    console.log(`[checkout] Usuario ${user._id} suscrito (${plan || 'plan?'}). Estado: ${subscription.status}${promoApplied ? ` · +${promoApplied.extraMonths}m promo` : ''}`);
 };
 
 const handleInvoicePaymentSucceeded = async (invoice) => {

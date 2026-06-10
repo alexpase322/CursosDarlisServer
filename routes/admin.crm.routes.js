@@ -20,6 +20,7 @@ const { getKpis } = require('../controllers/admin.kpis.controller');
 const { recalculateAllAchievements } = require('../controllers/engagement.controller');
 const { listPayments, diagnose } = require('../controllers/admin.payments.controller');
 const { reassignReferrer, getUserReferrerInfo } = require('../controllers/admin.referrer.controller');
+const { getPromo, updatePromo } = require('../controllers/admin.promos.controller');
 
 router.use(protect, admin);
 
@@ -52,5 +53,8 @@ router.get('/payments/diagnose', diagnose);
 
 router.get('/users/:userId/referrer', getUserReferrerInfo);
 router.put('/users/:userId/referrer', reassignReferrer);
+
+router.get('/promos/quarterly', getPromo);
+router.put('/promos/quarterly', updatePromo);
 
 module.exports = router;
