@@ -18,6 +18,7 @@ const leaderboardRoutes = require('./routes/leaderboard.routes');
 const engagementRoutes = require('./routes/engagement.routes');
 const webinarRoutes = require('./routes/webinar.routes');
 const promosRoutes = require('./routes/promos.routes');
+const testimonialRoutes = require('./routes/testimonial.routes');
 const { stripeWebhook } = require('./controllers/payment.controller');
 const { ensureStripeWebhook } = require('./services/stripeWebhookSetup');
 const { runReminderJob } = require('./services/reminderService');
@@ -111,6 +112,7 @@ app.use('/leaderboard', leaderboardRoutes);
 app.use('/engagement', engagementRoutes);
 app.use('/webinar', webinarRoutes);
 app.use('/promos', promosRoutes);
+app.use('/testimonials', testimonialRoutes);
 
 app.get('/', (req, res) => {
     res.send('API de Plataforma de Cursos funcionando...');
