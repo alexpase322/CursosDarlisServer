@@ -24,14 +24,28 @@ const { ensureStripeWebhook } = require('./services/stripeWebhookSetup');
 const { runReminderJob } = require('./services/reminderService');
 const { checkExpiredManualSubs } = require('./services/manualSubsService');
 const cron = require('node-cron');
-const http = require('http'); 
-const { Server } = require('socket.io'); 
+const http = require('http');
+const { Server } = require('socket.io');
+const helmet = require('helmet');
+const jwt = require('jsonwebtoken');
+const { mongoSanitize, generalLimiter, authLimiter, publicFormLimiter } = require('./middleware/security');
 
 // Configuración
 dotenv.config();
 connectDB();
 
 const app = express();
+
+// Detrás de proxy (Render/Railway/Vercel): confía en 1 salto para leer el IP real
+// (necesario para que el rate-limit funcione por IP y no por el IP del proxy).
+app.set('trust proxy', 1);
+
+// Cabeceras de seguridad HTTP (XSS, clickjacking, sniffing, etc.)
+// crossOriginResourcePolicy en 'cross-origin' para no romper imágenes/CDN.
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false // la CSP la maneja el frontend/host; evitamos romper el API
+}));
 
 // --- CORRECCIÓN AQUÍ: Lista de orígenes permitidos ---
 // Esto permite que funcione en tu PC y en Vercel al mismo tiempo sin cambiar variables
@@ -46,11 +60,15 @@ if (process.env.FRONTEND_URL) {
     allowedOrigins.push(process.env.FRONTEND_URL);
 }
 
-// Webhook de Stripe (debe ir antes del express.json)
-app.post('/payment/webhook', express.raw({ type: 'application/json' }), stripeWebhook);
+// Webhook de Stripe (debe ir antes del express.json, con límite propio)
+app.post('/payment/webhook', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhook);
 
-// Middlewares
-app.use(express.json()); 
+// Middlewares — límite explícito de tamaño de payload (anti-DoS por body gigante)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Sanitización NoSQL: elimina operadores $/. de body, query y params.
+app.use(mongoSanitize);
 
 // Configuración CORS para Express (Rutas normales)
 app.use(cors({
@@ -66,6 +84,9 @@ app.use(cors({
     credentials: true
 }));
 
+// Rate limit general para toda la API.
+app.use(generalLimiter);
+
 const server = http.createServer(app);
 
 // Configuración CORS para Socket.io (Chat y Notificaciones)
@@ -79,28 +100,85 @@ const io = new Server(server, {
 
 app.set('socketio', io);
 
-io.on("connection", (socket) => {
-    console.log(`Usuario conectado: ${socket.id}`);
+const Conversation = require('./models/Chat'); // Chat.js exporta el modelo 'Conversation'
 
-    socket.on("join_room", (conversationId) => {
-        socket.join(conversationId);
-        console.log(`Usuario ${socket.id} entró a la sala ${conversationId}`);
-    });
-
-    socket.on("send_message", (data) => {
-        socket.to(data.conversationId).emit("receive_message", data.message);
-    });
-
-    socket.on("disconnect", () => {
-        console.log("Usuario desconectado", socket.id);
-    });
+// Auth del socket: exige un JWT válido en el handshake (socket.handshake.auth.token).
+// Sin token válido, no se permite la conexión → nadie anónimo puede espiar salas.
+io.use((socket, next) => {
+    try {
+        const token = socket.handshake.auth && socket.handshake.auth.token;
+        if (!token) return next(new Error('No autorizado'));
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        socket.userId = String(decoded.id);
+        socket.userRole = decoded.role;
+        next();
+    } catch {
+        next(new Error('Token inválido'));
+    }
 });
 
-app.use('/auth', authRoutes);
+// Cache corto de membresía para no golpear Mongo en cada mensaje.
+const membershipCache = new Map(); // `${userId}:${convId}` → { ok, exp }
+async function isMember(userId, conversationId) {
+    if (!conversationId || typeof conversationId !== 'string' || conversationId.length > 40) return false;
+    const key = `${userId}:${conversationId}`;
+    const cached = membershipCache.get(key);
+    if (cached && cached.exp > Date.now()) return cached.ok;
+    let ok = false;
+    try {
+        ok = !!(await Conversation.exists({ _id: conversationId, members: userId }));
+    } catch {
+        ok = false;
+    }
+    membershipCache.set(key, { ok, exp: Date.now() + 60 * 1000 }); // 1 min
+    return ok;
+}
+
+io.on("connection", (socket) => {
+    // El usuario siempre puede unirse a SU sala personal (notificaciones),
+    // que es su propio _id. Lo hacemos automáticamente al conectar.
+    socket.join(socket.userId);
+
+    socket.on("join_room", async (roomId) => {
+        if (typeof roomId !== 'string') return;
+        // Sala personal propia (notificaciones): permitida.
+        if (roomId === socket.userId) {
+            socket.join(roomId);
+            return;
+        }
+        // Sala de conversación: solo si es miembro.
+        if (await isMember(socket.userId, roomId)) {
+            socket.join(roomId);
+        }
+        // Si no, se ignora silenciosamente.
+    });
+
+    socket.on("send_message", async (data) => {
+        const conversationId = data && data.conversationId;
+        if (!(await isMember(socket.userId, conversationId))) return;
+
+        const incoming = (data && data.message) || {};
+        const text = typeof incoming.text === 'string' ? incoming.text.trim().slice(0, 2000) : '';
+        if (!text) return;
+
+        // Forzamos que el sender sea el usuario autenticado (anti-spoofing).
+        const safeMessage = {
+            sender: socket.userId,
+            text,
+            createdAt: Date.now()
+        };
+        socket.to(conversationId).emit("receive_message", safeMessage);
+    });
+
+    socket.on("disconnect", () => { /* noop */ });
+});
+
+// Rate limit estricto en autenticación (login/registro/reset) — anti fuerza bruta.
+app.use('/auth', authLimiter, authRoutes);
 app.use('/users', userRoutes);
 app.use('/courses', courseRoutes);
 app.use('/posts', postRoutes);
-app.use('/chat', chatRoutes); 
+app.use('/chat', chatRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/payment', paymentRoutes);
 app.use('/affiliate', affiliateRoutes);
@@ -110,7 +188,8 @@ app.use('/courses', courseProgressRoutes);
 app.use('/quizzes', quizRoutes);
 app.use('/leaderboard', leaderboardRoutes);
 app.use('/engagement', engagementRoutes);
-app.use('/webinar', webinarRoutes);
+// Formularios públicos (webinar): anti-spam.
+app.use('/webinar', publicFormLimiter, webinarRoutes);
 app.use('/promos', promosRoutes);
 app.use('/testimonials', testimonialRoutes);
 

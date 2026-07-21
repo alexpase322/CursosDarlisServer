@@ -3,6 +3,7 @@ const Commission = require('../models/Commission');
 const PartnerApplication = require('../models/PartnerApplication');
 const { setLevelManually } = require('../services/levelService');
 const { backfillCommissionsForUser } = require('../services/commissionService');
+const { safeSearchRegex } = require('../middleware/security');
 
 // GET /admin/affiliates  — listado paginado con filtros
 const listAffiliates = async (req, res) => {
@@ -12,8 +13,8 @@ const listAffiliates = async (req, res) => {
         if (level) filter.partnerLevel = parseInt(level);
         if (q) {
             filter.$or = [
-                { username: { $regex: q, $options: 'i' } },
-                { email: { $regex: q, $options: 'i' } }
+                { username: safeSearchRegex(q) },
+                { email: safeSearchRegex(q) }
             ];
         }
         const skip = (parseInt(page) - 1) * parseInt(limit);

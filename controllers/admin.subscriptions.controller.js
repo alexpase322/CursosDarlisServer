@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const { recordCommissionFromManualPayment } = require('../services/commissionService');
 const { checkExpiredManualSubs } = require('../services/manualSubsService');
+const { safeSearchRegex } = require('../middleware/security');
 
 // GET /admin/subscriptions
 // Lista usuarios (rol != admin) con su info de suscripción y último pago.
@@ -21,8 +22,8 @@ const listSubscriptions = async (req, res) => {
         const filter = { role: { $ne: 'admin' } };
         if (q) {
             filter.$or = [
-                { username: { $regex: q, $options: 'i' } },
-                { email: { $regex: q, $options: 'i' } }
+                { username: safeSearchRegex(q) },
+                { email: safeSearchRegex(q) }
             ];
         }
         if (status) {

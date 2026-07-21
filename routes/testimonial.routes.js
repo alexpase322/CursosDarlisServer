@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, admin } = require('../middleware/authMiddleware');
-const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
+const { singleImage } = require('../config/upload');
 const {
     getTestimonials,
     getMyTestimonials,
@@ -25,7 +24,7 @@ router.patch('/:id/status', protect, admin, setStatus);
 // Miembros
 router.get('/', protect, getTestimonials);
 router.get('/me', protect, getMyTestimonials);
-router.post('/', protect, upload.single('image'), createTestimonial);
+router.post('/', protect, singleImage('image'), createTestimonial);
 router.delete('/:id', protect, deleteTestimonial);
 
 module.exports = router;

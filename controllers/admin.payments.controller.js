@@ -1,5 +1,6 @@
 const Payment = require('../models/Payment');
 const User = require('../models/User');
+const { safeSearchRegex } = require('../middleware/security');
 
 // Determina la "fuente" del pago: stripe / manual / trial
 const sourceOf = (p) => {
@@ -45,7 +46,7 @@ const listPayments = async (req, res) => {
         const filter = { paidAt: { $gte: from, $lt: to } };
         if (status) filter.status = status;
         if (plan) filter.plan = plan;
-        if (q) filter.email = { $regex: q, $options: 'i' };
+        if (q) filter.email = safeSearchRegex(q);
 
         // Filtro por source (se aplica como condición sobre stripeInvoiceId)
         if (source === 'manual') filter.stripeInvoiceId = { $regex: '^manual_' };

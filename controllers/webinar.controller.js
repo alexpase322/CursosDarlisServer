@@ -1,14 +1,24 @@
 const WebinarLead = require('../models/WebinarLead');
 const { Resend } = require('resend');
+const validator = require('validator');
+const { safeSearchRegex } = require('../middleware/security');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // POST /webinar/register  — público
 const registerLead = async (req, res) => {
     try {
-        const { name, email, phone = '', source = 'webinar-page' } = req.body || {};
-        if (!name || !email) return res.status(400).json({ message: 'Nombre y email son obligatorios' });
+        let { name, email, phone = '', source = 'webinar-page' } = req.body || {};
 
-        const normalized = (email || '').toLowerCase().trim();
+        // Validación / saneo de entrada
+        name = typeof name === 'string' ? name.trim().slice(0, 100) : '';
+        email = typeof email === 'string' ? email.trim().toLowerCase().slice(0, 150) : '';
+        phone = typeof phone === 'string' ? phone.trim().slice(0, 40) : '';
+        source = typeof source === 'string' ? source.trim().slice(0, 60) : 'webinar-page';
+
+        if (!name || !email) return res.status(400).json({ message: 'Nombre y email son obligatorios' });
+        if (!validator.isEmail(email)) return res.status(400).json({ message: 'Email inválido' });
+
+        const normalized = email;
 
         // Idempotente por email + source: si ya se registró, actualizamos sus datos.
         const existing = await WebinarLead.findOne({ email: normalized, source });
@@ -88,8 +98,8 @@ const listLeads = async (req, res) => {
         const { q, source, page = 1, limit = 50 } = req.query;
         const filter = {};
         if (q) filter.$or = [
-            { name: { $regex: q, $options: 'i' } },
-            { email: { $regex: q, $options: 'i' } }
+            { name: safeSearchRegex(q) },
+            { email: safeSearchRegex(q) }
         ];
         if (source) filter.source = source;
         const skip = (parseInt(page) - 1) * parseInt(limit);

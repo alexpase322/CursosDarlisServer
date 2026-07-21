@@ -9,6 +9,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { sendInvitation } = require('../services/invitationService');
 const { backfillCommissionsForUser, onReferredSubscriptionActivated } = require('../services/commissionService');
+const validator = require('validator');
 
 // Inicializar Resend
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -21,7 +22,21 @@ const generateToken = (id, role) => {
 // @desc    Registrar nuevo usuario
 // @route   POST /api/auth/register
 const registerUser = async (req, res) => {
-    const { username, email, password } = req.body;
+    let { username, email, password } = req.body;
+
+    // Validación de entrada
+    username = typeof username === 'string' ? username.trim() : '';
+    email = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+    if (!username || username.length < 2 || username.length > 60) {
+        return res.status(400).json({ message: 'El nombre debe tener entre 2 y 60 caracteres.' });
+    }
+    if (!email || !validator.isEmail(email)) {
+        return res.status(400).json({ message: 'Email inválido.' });
+    }
+    if (typeof password !== 'string' || password.length < 8 || password.length > 200) {
+        return res.status(400).json({ message: 'La contraseña debe tener al menos 8 caracteres.' });
+    }
 
     try {
         const userExists = await User.findOne({ email });
@@ -50,19 +65,25 @@ const registerUser = async (req, res) => {
             res.status(400).json({ message: 'Datos de usuario inválidos' });
         }
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('registerUser', error);
+        res.status(500).json({ message: 'Error al registrar. Intenta más tarde.' });
     }
 };
 
 // @desc    Login de usuario
 // @route   POST /api/auth/login
 const loginUser = async (req, res) => {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
+    email = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+    if (!email || typeof password !== 'string' || !password) {
+        return res.status(401).json({ message: 'Email o contraseña incorrectos' });
+    }
 
     try {
         const user = await User.findOne({ email });
 
-        if (user && (await bcrypt.compare(password, user.password))) {
+        if (user && user.password && (await bcrypt.compare(password, user.password))) {
             res.json({
                 _id: user.id,
                 username: user.username,
@@ -75,7 +96,8 @@ const loginUser = async (req, res) => {
             res.status(401).json({ message: 'Email o contraseña incorrectos' });
         }
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('loginUser', error);
+        res.status(500).json({ message: 'Error al iniciar sesión. Intenta más tarde.' });
     }
 };
 

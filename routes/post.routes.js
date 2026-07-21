@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
+const { singleImage } = require('../config/upload');
 const {
     getPosts,
     createPost,
@@ -14,7 +13,7 @@ const {
 
 // Rutas base: /api/posts
 router.get('/', protect, getPosts);
-router.post('/', protect, upload.single('image'), createPost);
+router.post('/', protect, singleImage('image'), createPost);
 router.put('/:id/like', protect, toggleLike);
 router.put('/:id/react/:type', protect, toggleReaction);
 router.post('/:id/comment', protect, addComment);

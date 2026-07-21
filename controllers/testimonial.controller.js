@@ -1,6 +1,7 @@
 const Testimonial = require('../models/Testimonial');
 const cloudinary = require('../config/cloudinary');
 const fs = require('fs');
+const { safeSearchRegex } = require('../middleware/security');
 
 const AUTHOR_FIELDS = 'username avatar role partnerLevel topAchievementTier topAchievementCode';
 
@@ -127,7 +128,7 @@ const adminListTestimonials = async (req, res) => {
         if (status) filter.status = status;
         if (featured === 'true') filter.featured = true;
         if (featured === 'false') filter.featured = false;
-        if (q) filter.content = { $regex: q, $options: 'i' };
+        if (q) filter.content = safeSearchRegex(q);
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [items, total, summary] = await Promise.all([

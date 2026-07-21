@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const cloudinary = require('../config/cloudinary');
 const fs = require('fs'); // File System de Node para borrar archivos temporales
+const { safeSearchRegex } = require('../middleware/security');
 
 // @desc    Actualizar perfil de usuario
 // @route   PUT /api/users/profile
@@ -53,16 +54,17 @@ const updateUserProfile = async (req, res) => {
 
 const getAllUsers = async (req, res) => {
     try {
-        const keyword = req.query.search
+        const search = typeof req.query.search === 'string' ? req.query.search : '';
+        const keyword = search
             ? {
                 $or: [
-                    { username: { $regex: req.query.search, $options: "i" } },
-                    { email: { $regex: req.query.search, $options: "i" } },
+                    { username: safeSearchRegex(search) },
+                    { email: safeSearchRegex(search) },
                 ],
             }
             : {};
 
-        const users = await User.find(keyword).select('-password'); // No enviamos la contraseña
+        const users = await User.find(keyword).select('-password').limit(200); // No enviamos la contraseña
         res.json(users);
     } catch (error) {
         res.status(500).json({ message: "Error al obtener usuarios" });

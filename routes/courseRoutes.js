@@ -2,18 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { createCourse, getAllCourses, getCourse, updateCourse, deleteCourse, addLesson, addModule, deleteLesson, deleteModule, addResource, deleteResource} = require('../controllers/courseController');
 const { protect, admin } = require('../middleware/authMiddleware');
-const multer = require('multer');
-
-const upload = multer({ dest: 'uploads/' });
+const { singleImage } = require('../config/upload');
 
 router.route('/')
     .get(protect, getAllCourses)
-    .post(protect, admin, upload.single('thumbnail'), createCourse);
+    .post(protect, admin, singleImage('thumbnail'), createCourse);
 
 // Rutas específicas por ID (GET, PUT, DELETE)
 router.route('/:id')
     .get(protect, getCourse)
-    .put(protect, admin, upload.single('thumbnail'), updateCourse)
+    .put(protect, admin, singleImage('thumbnail'), updateCourse)
     .delete(protect, admin, deleteCourse);
 
 router.route('/:id/modules')
