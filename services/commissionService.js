@@ -1,6 +1,6 @@
 const Commission = require('../models/Commission');
 const User = require('../models/User');
-const { rates, prices, inferPlan } = require('../config/affiliateConfig');
+const { rates, prices, inferPlan, calculateCommission } = require('../config/affiliateConfig');
 const { evaluateAutoPromotion } = require('./levelService');
 const { sendToUser } = require('./pushService');
 const { unlockAchievement, evaluateMilestones } = require('./engagementService');
@@ -94,12 +94,12 @@ async function recordCommissionFromManualPayment(payment) {
     if (!affiliate) return null;
 
     const plan = payment.plan || 'monthly';
-    if (!rates[plan]) {
-        console.warn(`[commissions manual] plan ${plan} no tiene rate definido; skip ${payment.stripeInvoiceId}`);
+    const calc = calculateCommission(plan, payment.amountUSD);
+    if (!calc) {
+        console.warn(`[commissions manual] plan ${plan} sin comisión definida; skip ${payment.stripeInvoiceId}`);
         return null;
     }
-    const commissionPercent = rates[plan] * 100;
-    const commissionAmountUSD = +(payment.amountUSD * rates[plan]).toFixed(2);
+    const { amountUSD: commissionAmountUSD, percent: commissionPercent } = calc;
 
     let commission;
     try {
@@ -174,8 +174,12 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
     }
 
     const finalGross = grossAmountUSD != null ? grossAmountUSD : prices[plan];
-    const commissionPercent = rates[plan] * 100;
-    const commissionAmountUSD = +(finalGross * rates[plan]).toFixed(2);
+    const calc = calculateCommission(plan, finalGross);
+    if (!calc) {
+        console.warn(`[commissions] plan ${plan} sin comisión definida; skip invoice ${invoice.id}`);
+        return null;
+    }
+    const { amountUSD: commissionAmountUSD, percent: commissionPercent } = calc;
 
     const periodStart = lineItem && lineItem.period && lineItem.period.start
         ? new Date(lineItem.period.start * 1000)
@@ -219,6 +223,63 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
     );
 
     // Logros por hito de comisión (recalcula milestones acumulativos).
+    evaluateMilestones(affiliate._id).catch(() => {});
+
+    return commission;
+}
+
+// Comisión de una venta de PAGO ÚNICO (ej. plan lifetime $247 → $197 para la afiliada).
+// Los pagos únicos de Stripe no generan invoice, así que usamos el id del
+// checkout session / payment_intent como clave de idempotencia.
+async function recordCommissionForOneTimeSale({
+    referredUser, affiliateId, plan, grossAmountUSD, externalId, paidAt
+}) {
+    if (!referredUser || !affiliateId || !externalId) return null;
+
+    const existing = await Commission.findOne({ stripeInvoiceId: externalId });
+    if (existing) return existing;
+
+    const affiliate = await User.findById(affiliateId);
+    if (!affiliate) return null;
+    // Una afiliada no cobra comisión por su propia compra.
+    if (String(affiliate._id) === String(referredUser._id)) return null;
+
+    const calc = calculateCommission(plan, grossAmountUSD);
+    if (!calc) {
+        console.warn(`[commissions one-time] plan ${plan} sin comisión definida; skip ${externalId}`);
+        return null;
+    }
+
+    let commission;
+    try {
+        commission = await Commission.create({
+            affiliate: affiliate._id,
+            referredUser: referredUser._id,
+            stripeInvoiceId: externalId,
+            stripeSubscriptionId: null,
+            plan,
+            grossAmountUSD,
+            commissionPercent: calc.percent,
+            commissionAmountUSD: calc.amountUSD,
+            periodStart: paidAt || new Date(),
+            periodEnd: null,
+            status: 'available'
+        });
+    } catch (err) {
+        if (err.code === 11000) return await Commission.findOne({ stripeInvoiceId: externalId });
+        throw err;
+    }
+
+    affiliate.referralStats = affiliate.referralStats || {};
+    affiliate.referralStats.totalEarnedUSD = (affiliate.referralStats.totalEarnedUSD || 0) + calc.amountUSD;
+    affiliate.referralStats.pendingUSD = (affiliate.referralStats.pendingUSD || 0) + calc.amountUSD;
+    await affiliate.save();
+
+    await evaluateAutoPromotion(affiliate);
+
+    notifyAffiliateOfCommission(affiliate, referredUser, calc.amountUSD, plan).catch(e =>
+        console.error('[notifyAffiliateOfCommission one-time]', e.message)
+    );
     evaluateMilestones(affiliate._id).catch(() => {});
 
     return commission;
@@ -322,6 +383,7 @@ async function voidCommissionByInvoiceId(invoiceId) {
 module.exports = {
     recordCommissionFromInvoice,
     recordCommissionFromManualPayment,
+    recordCommissionForOneTimeSale,
     backfillCommissionsForUser,
     onReferredSubscriptionActivated,
     onReferredSubscriptionCanceled,

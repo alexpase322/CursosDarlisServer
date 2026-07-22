@@ -45,6 +45,16 @@ async function setLevelManually(userId, newLevel) {
         evaluateMilestones(user._id).catch(() => {});
     } catch { /* noop */ }
 
+    // Al llegar a Partner (N2+) se le genera su link de afiliada.
+    if (newLevel >= 2) {
+        try {
+            const { ensureReferralCode } = require('./referralService');
+            await ensureReferralCode(user);
+        } catch (e) {
+            console.error('[setLevelManually] referralCode:', e.message);
+        }
+    }
+
     return user;
 }
 

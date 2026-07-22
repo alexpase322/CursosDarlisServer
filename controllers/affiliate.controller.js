@@ -2,7 +2,12 @@ const User = require('../models/User');
 const Commission = require('../models/Commission');
 const PartnerApplication = require('../models/PartnerApplication');
 const Payment = require('../models/Payment');
-const { rates, prices } = require('../config/affiliateConfig');
+const { rates, prices, flatCommissions } = require('../config/affiliateConfig');
+const {
+    ensureReferralCode,
+    resolveReferralCode,
+    buildReferralLink
+} = require('../services/referralService');
 
 // GET /affiliate/me  — resumen de la afiliada autenticada
 const getMyAffiliateSummary = async (req, res) => {
@@ -180,9 +185,64 @@ const applyForPartner = async (req, res) => {
     }
 };
 
+// GET /affiliate/me/link — mi link de afiliada (lo crea si aún no existe)
+const getMyReferralLink = async (req, res) => {
+    try {
+        const code = await ensureReferralCode(req.user._id);
+        if (!code) return res.status(404).json({ message: 'No encontrado' });
+
+        const fresh = await User.findById(req.user._id)
+            .select('referralCode referralClicks referralSignups').lean();
+
+        res.json({
+            code,
+            link: buildReferralLink(code),
+            clicks: fresh?.referralClicks || 0,
+            signups: fresh?.referralSignups || 0,
+            // Cuánto gana por cada plan (para mostrarlo en el panel)
+            earnings: {
+                monthly:   { price: prices.monthly,   commission: +(prices.monthly * rates.monthly).toFixed(2),     recurrente: true },
+                quarterly: { price: prices.quarterly, commission: +(prices.quarterly * rates.quarterly).toFixed(2), recurrente: true },
+                yearly:    { price: prices.yearly,    commission: +(prices.yearly * rates.yearly).toFixed(2),       recurrente: true },
+                lifetime:  { price: prices.lifetime,  commission: flatCommissions.lifetime,                         recurrente: false }
+            }
+        });
+    } catch (err) {
+        console.error('getMyReferralLink', err);
+        res.status(500).json({ message: 'Error al obtener tu link' });
+    }
+};
+
+// GET /affiliate/r/:code — público. Resuelve el código y cuenta el clic.
+const resolveAndTrackCode = async (req, res) => {
+    try {
+        const affiliate = await resolveReferralCode(req.params.code);
+        if (!affiliate) return res.status(404).json({ valid: false });
+
+        // Contador de clics (no bloqueante)
+        User.updateOne({ _id: affiliate._id }, { $inc: { referralClicks: 1 } }).catch(() => {});
+
+        res.json({
+            valid: true,
+            code: affiliate.referralCode,
+            affiliate: {
+                _id: affiliate._id,
+                username: affiliate.username,
+                avatar: affiliate.avatar,
+                partnerLevel: affiliate.partnerLevel
+            }
+        });
+    } catch (err) {
+        console.error('resolveAndTrackCode', err);
+        res.status(500).json({ valid: false });
+    }
+};
+
 module.exports = {
     getMyAffiliateSummary,
     getMyCommissions,
     getMyReferrals,
-    applyForPartner
+    applyForPartner,
+    getMyReferralLink,
+    resolveAndTrackCode
 };

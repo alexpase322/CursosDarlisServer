@@ -5,7 +5,9 @@ const {
     getMyAffiliateSummary,
     getMyCommissions,
     getMyReferrals,
-    applyForPartner
+    applyForPartner,
+    getMyReferralLink,
+    resolveAndTrackCode
 } = require('../controllers/affiliate.controller');
 
 // Middleware: solo afiliadas (partnerLevel >= 2) o admin. Para /apply (N1) se omite.
@@ -18,7 +20,11 @@ const partnerOnly = (req, res, next) => {
     next();
 };
 
+// Público: resolver un código de referido (lo usa la página /r/:code)
+router.get('/r/:code', resolveAndTrackCode);
+
 router.get('/me', protect, partnerOnly, getMyAffiliateSummary);
+router.get('/me/link', protect, partnerOnly, getMyReferralLink);
 router.get('/me/commissions', protect, partnerOnly, getMyCommissions);
 router.get('/me/referrals', protect, partnerOnly, getMyReferrals);
 router.post('/apply', protect, applyForPartner);

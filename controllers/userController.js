@@ -2,6 +2,7 @@ const User = require('../models/User');
 const cloudinary = require('../config/cloudinary');
 const fs = require('fs'); // File System de Node para borrar archivos temporales
 const { safeSearchRegex } = require('../middleware/security');
+const { deleteUserCascade } = require('../services/userDeletionService');
 
 // @desc    Actualizar perfil de usuario
 // @route   PUT /api/users/profile
@@ -87,12 +88,37 @@ const updateUserRole = async (req, res) => {
     }
 };
 
-// 3. Eliminar Usuario
+// 3. Eliminar Usuario (con limpieza en cascada)
+// Cancela la suscripción en Stripe, anula comisiones asociadas, desvincula
+// referidas y borra el contenido generado. Ver services/userDeletionService.js
 const deleteUser = async (req, res) => {
     try {
-        await User.findByIdAndDelete(req.params.id);
-        res.json({ message: "Usuario eliminado" });
+        const targetId = req.params.id;
+
+        // Protección: no borrarte a ti misma por accidente.
+        if (String(targetId) === String(req.user._id)) {
+            return res.status(400).json({ message: 'No puedes eliminar tu propia cuenta desde aquí.' });
+        }
+
+        const target = await User.findById(targetId).select('role email username');
+        if (!target) return res.status(404).json({ message: 'Usuario no encontrado' });
+
+        // Protección: no dejar la plataforma sin administradoras.
+        if (target.role === 'admin') {
+            const admins = await User.countDocuments({ role: 'admin' });
+            if (admins <= 1) {
+                return res.status(400).json({ message: 'No puedes eliminar a la única administradora.' });
+            }
+        }
+
+        const result = await deleteUserCascade(targetId);
+        if (!result.ok) {
+            return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
+
+        res.json({ message: 'Usuario eliminado', stats: result.stats });
     } catch (error) {
+        console.error('deleteUser', error);
         res.status(500).json({ message: "Error eliminando usuario" });
     }
 };

@@ -3,11 +3,13 @@ const Payment = require('../models/Payment');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const {
     recordCommissionFromInvoice,
+    recordCommissionForOneTimeSale,
     onReferredSubscriptionActivated,
     onReferredSubscriptionCanceled,
     voidCommissionByInvoiceId
 } = require('../services/commissionService');
-const { inferPlan } = require('../config/affiliateConfig');
+const { inferPlan, planFromStripePriceId, isOneTimePlan, prices } = require('../config/affiliateConfig');
+const { resolveReferralCode, ensureReferralCode } = require('../services/referralService');
 const { sendInvitation } = require('../services/invitationService');
 const { sendToAdmins } = require('../services/pushService');
 const { getQuarterlyPromo } = require('../services/promoService');
@@ -16,14 +18,19 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 // 1. Crear Sesión de Checkout (Redirige al usuario a Stripe)
 const createCheckoutSession = async (req, res) => {
-    const { priceId, email } = req.body;
+    const { priceId, email, referralCode } = req.body;
 
     try {
+        if (!priceId || typeof priceId !== 'string') {
+            return res.status(400).json({ message: 'Plan inválido' });
+        }
+
         let customerId = null;
         let userIdForMetadata = null;
+        const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
-        if (email) {
-            const user = await User.findOne({ email });
+        if (normalizedEmail) {
+            const user = await User.findOne({ email: normalizedEmail });
             if (user) {
                 userIdForMetadata = user._id.toString();
                 if (user.subscription?.customerId) {
@@ -32,29 +39,53 @@ const createCheckoutSession = async (req, res) => {
             }
         }
 
+        // Resolver el código de afiliada (si vino del link /r/<code>) para
+        // dejarlo en la metadata y atribuir la venta en el webhook.
+        let affiliateId = null;
+        let affiliateCode = null;
+        if (referralCode && typeof referralCode === 'string') {
+            const affiliate = await resolveReferralCode(referralCode);
+            if (affiliate) {
+                affiliateId = String(affiliate._id);
+                affiliateCode = affiliate.referralCode;
+            }
+        }
+
+        // ¿Es un plan de pago único (lifetime) o una suscripción?
+        const planFromPrice = planFromStripePriceId(priceId);
+        const oneTime = isOneTimePlan(planFromPrice);
+
+        const metadata = {};
+        if (userIdForMetadata) metadata.userId = userIdForMetadata;
+        if (affiliateId) metadata.affiliateId = affiliateId;
+        if (affiliateCode) metadata.referralCode = affiliateCode;
+        if (planFromPrice) metadata.plan = planFromPrice;
+
         const sessionConfig = {
             payment_method_types: ['card'],
             line_items: [{ price: priceId, quantity: 1 }],
-            mode: 'subscription',
+            mode: oneTime ? 'payment' : 'subscription',
             success_url: `${process.env.FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${process.env.FRONTEND_URL}/#planes`,
-            metadata: userIdForMetadata ? { userId: userIdForMetadata } : {},
-            subscription_data: userIdForMetadata
-                ? { metadata: { userId: userIdForMetadata } }
-                : undefined
+            metadata
         };
+
+        // La metadata también se copia a la suscripción (solo aplica en mode:'subscription').
+        if (!oneTime && Object.keys(metadata).length > 0) {
+            sessionConfig.subscription_data = { metadata };
+        }
 
         if (customerId) {
             sessionConfig.customer = customerId;
-        } else {
-            sessionConfig.customer_email = email;
+        } else if (normalizedEmail) {
+            sessionConfig.customer_email = normalizedEmail;
         }
 
         const session = await stripe.checkout.sessions.create(sessionConfig);
         res.json({ url: session.url });
 
     } catch (error) {
-        console.error(error);
+        console.error('createCheckoutSession', error);
         res.status(500).json({ message: "Error al crear sesión de pago" });
     }
 };
@@ -112,10 +143,140 @@ const stripeWebhook = async (req, res) => {
 
 // --- Helpers ---
 
+// Compra de PAGO ÚNICO (plan lifetime $247).
+// Otorga: acceso de por vida + activación automática como Partner (N2) + su link
+// de afiliada, y paga la comisión fija ($197) a quien la refirió.
+const handleOneTimePurchase = async (session) => {
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const meta = session.metadata || {};
+
+    // 1) Resolver email de la compradora
+    let email = (session.customer_email || session.customer_details?.email || '').toLowerCase().trim();
+    if (!email && session.customer) {
+        try {
+            const c = await stripe.customers.retrieve(session.customer);
+            email = c && !c.deleted && c.email ? c.email.toLowerCase().trim() : '';
+        } catch { /* noop */ }
+    }
+    if (!email) {
+        console.warn('[one-time] sin email, no se puede procesar la compra', session.id);
+        return;
+    }
+
+    const amountUSD = session.amount_total != null ? session.amount_total / 100 : prices.lifetime;
+    const plan = meta.plan || 'lifetime';
+    const paidAt = new Date();
+
+    // 2) Buscar o crear la usuaria (auto-invitación crea la cuenta + manda el correo)
+    let user = meta.userId ? await User.findById(meta.userId) : null;
+    if (!user) {
+        user = await User.findOne({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
+    }
+    if (!user) {
+        try {
+            const r = await sendInvitation({ email, role: 'user', mode: 'auto' });
+            if (r.userId) user = await User.findById(r.userId);
+            console.log(`[one-time] auto-invite ${email} → ${r.reason}`);
+        } catch (err) {
+            console.error('[one-time] error creando usuaria:', err.message);
+        }
+    }
+    if (!user) {
+        console.warn('[one-time] no se pudo resolver/crear la usuaria', email);
+        return;
+    }
+
+    // 3) Atribuir la afiliada que la refirió (solo si aún no tiene una)
+    if (!user.referredBy && meta.affiliateId) {
+        try {
+            const affiliate = await User.findById(meta.affiliateId).select('_id partnerLevel');
+            if (affiliate && String(affiliate._id) !== String(user._id) && affiliate.partnerLevel >= 2) {
+                user.referredBy = affiliate._id;
+            }
+        } catch { /* noop */ }
+    }
+
+    // 4) Otorgar acceso vitalicio + activarla como Partner N2
+    const wasPartner = (user.partnerLevel || 1) >= 2;
+    user.lifetimeAccess = true;
+    user.lifetimeGrantedAt = user.lifetimeGrantedAt || paidAt;
+    user.subscription = {
+        ...(user.subscription || {}),
+        id: user.subscription?.id || `lifetime_${user._id}`,
+        customerId: session.customer || user.subscription?.customerId,
+        status: 'active',
+        plan: 'lifetime',
+        currentPeriodEnd: null   // nunca vence
+    };
+    if (!wasPartner) {
+        user.partnerLevel = 2;
+        user.partnerActivatedAt = paidAt;
+    }
+    await user.save();
+
+    // 5) Generar su link de afiliada
+    try { await ensureReferralCode(user); } catch (e) { console.error('[one-time] referralCode', e.message); }
+
+    // 6) Registrar el pago (idempotente por el id del checkout session)
+    const externalId = session.payment_intent || session.id;
+    try {
+        await Payment.updateOne(
+            { stripeInvoiceId: externalId },
+            { $setOnInsert: {
+                email,
+                stripeCustomerId: session.customer || null,
+                stripeInvoiceId: externalId,
+                stripeSubscriptionId: null,
+                plan,
+                amountUSD,
+                status: 'paid',
+                paidAt
+            } },
+            { upsert: true }
+        );
+    } catch (err) {
+        if (err.code !== 11000) console.error('[one-time] Payment', err.message);
+    }
+
+    // 7) Comisión fija para la afiliada que la refirió
+    if (user.referredBy) {
+        try {
+            const c = await recordCommissionForOneTimeSale({
+                referredUser: user,
+                affiliateId: user.referredBy,
+                plan,
+                grossAmountUSD: amountUSD,
+                externalId,
+                paidAt
+            });
+            if (c) console.log(`[one-time] comisión $${c.commissionAmountUSD} → afiliada ${user.referredBy}`);
+        } catch (err) {
+            console.error('[one-time] comisión:', err.message);
+        }
+        // Contar como referida activa
+        try { await onReferredSubscriptionActivated(user); } catch { /* noop */ }
+    }
+
+    // 8) Avisar a los admins
+    notifyAdminsOfNewSubscription(user, {
+        amount_paid: session.amount_total,
+        customer_email: email
+    }).catch(e => console.error('[one-time] notifyAdmins', e.message));
+
+    console.log(`[one-time] ${email} → acceso vitalicio + Partner N2 · $${amountUSD}`);
+};
+
 const handleCheckoutSuccess = async (session) => {
     const userId = session.metadata && session.metadata.userId;
     const subscriptionId = session.subscription;
-    if (!subscriptionId) return;
+
+    // Pago único (plan lifetime $247): no crea suscripción en Stripe.
+    if (!subscriptionId || session.mode === 'payment') {
+        if (session.mode === 'payment') {
+            await handleOneTimePurchase(session);
+        }
+        return;
+    }
 
     let subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const subItem = subscription.items.data[0];

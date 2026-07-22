@@ -11,7 +11,8 @@ const {
     listApplications,
     approveApplication,
     rejectApplication,
-    recalculateCommissions
+    recalculateCommissions,
+    generateReferralLinks
 } = require('../controllers/admin.crm.controller');
 const { syncPayments } = require('../controllers/stripe.sync.controller');
 const { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayments } = require('../controllers/admin.subscriptions.controller');
@@ -25,6 +26,7 @@ const { getPromo, updatePromo } = require('../controllers/admin.promos.controlle
 router.use(protect, admin);
 
 router.get('/affiliates', listAffiliates);
+router.post('/affiliates/generate-links', generateReferralLinks);
 router.get('/affiliates/:id', getAffiliateDetail);
 router.put('/affiliates/:id/level', changeLevel);
 

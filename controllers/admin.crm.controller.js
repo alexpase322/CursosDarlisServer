@@ -4,6 +4,7 @@ const PartnerApplication = require('../models/PartnerApplication');
 const { setLevelManually } = require('../services/levelService');
 const { backfillCommissionsForUser } = require('../services/commissionService');
 const { safeSearchRegex } = require('../middleware/security');
+const { ensureReferralCode, backfillReferralCodes } = require('../services/referralService');
 
 // GET /admin/affiliates  — listado paginado con filtros
 const listAffiliates = async (req, res) => {
@@ -269,6 +270,13 @@ const approveApplication = async (req, res) => {
             await user.save();
         }
 
+        // Generar su link de afiliada al activarla como Partner.
+        try {
+            await ensureReferralCode(user);
+        } catch (e) {
+            console.error('[approveApplication] referralCode:', e.message);
+        }
+
         application.status = 'approved';
         application.decidedBy = req.user._id;
         application.decidedAt = new Date();
@@ -351,10 +359,23 @@ const recalculateCommissions = async (req, res) => {
     }
 };
 
+// POST /admin/affiliates/generate-links
+// Genera el código de referido para todas las afiliadas N2+ que aún no lo tengan.
+const generateReferralLinks = async (req, res) => {
+    try {
+        const result = await backfillReferralCodes();
+        res.json({ ok: true, ...result });
+    } catch (err) {
+        console.error('generateReferralLinks', err);
+        res.status(500).json({ message: 'Error al generar links' });
+    }
+};
+
 module.exports = {
     listAffiliates,
     getAffiliateDetail,
     changeLevel,
+    generateReferralLinks,
     listCommissions,
     markCommissionPaid,
     bulkMarkCommissionsPaid,

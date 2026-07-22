@@ -48,6 +48,10 @@ const userSchema = new mongoose.Schema({
         currentPeriodEnd: Date,
         customerId: String
     },
+    // Acceso vitalicio (plan de pago único $247). Si es true, el acceso nunca vence
+    // y los crons de vencimiento lo ignoran.
+    lifetimeAccess: { type: Boolean, default: false },
+    lifetimeGrantedAt: { type: Date, default: null },
 
     // --- Programa de afiliadas ---
     partnerLevel: {
@@ -64,6 +68,17 @@ const userSchema = new mongoose.Schema({
         ref: 'User',
         default: null
     },
+    // Código único para el link de afiliada: /r/<referralCode>
+    referralCode: {
+        type: String,
+        unique: true,
+        sparse: true,   // permite null en usuarias que aún no son afiliadas
+        index: true,
+        trim: true
+    },
+    // Contadores del link (para medir cuánto tráfico trae cada afiliada)
+    referralClicks: { type: Number, default: 0 },
+    referralSignups: { type: Number, default: 0 },
     referralStats: {
         totalReferred: { type: Number, default: 0 },
         activeReferred: { type: Number, default: 0 },
