@@ -1,11 +1,19 @@
 // Configuración del programa de afiliadas.
 // Las claves STRIPE_PRICE_* las rellena el admin en .env con los IDs reales de Stripe.
 
+// PLANES A LA VENTA hoy: solo mensual ($50) y pago único ($247).
+// `quarterly` y `yearly` quedan DESCONTINUADOS: ya no se ofrecen en la landing,
+// pero se mantienen aquí para que las alumnas que ya los tienen sigan renovando
+// y generando su comisión correctamente. No borrar.
+const sellablePlans = ['monthly', 'lifetime'];
+const legacyPlans = ['quarterly', 'yearly'];
+const isSellablePlan = (plan) => sellablePlans.includes(plan);
+
 // Comisiones porcentuales (planes de suscripción recurrente).
 const rates = {
     monthly: 0.40,
-    quarterly: 0.40,
-    yearly: 0.50
+    quarterly: 0.40,  // legacy
+    yearly: 0.50      // legacy
 };
 
 // Comisiones de monto FIJO (planes de pago único). Tienen prioridad sobre `rates`.
@@ -16,8 +24,8 @@ const flatCommissions = {
 
 const prices = {
     monthly: 50,
-    quarterly: 120,
-    yearly: 397,
+    quarterly: 120,   // legacy
+    yearly: 397,      // legacy
     lifetime: 247
 };
 
@@ -111,6 +119,9 @@ module.exports = {
     rates,
     flatCommissions,
     prices,
+    sellablePlans,
+    legacyPlans,
+    isSellablePlan,
     oneTimePlans,
     isOneTimePlan,
     stripePriceMap,

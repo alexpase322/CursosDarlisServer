@@ -199,12 +199,10 @@ const getMyReferralLink = async (req, res) => {
             link: buildReferralLink(code),
             clicks: fresh?.referralClicks || 0,
             signups: fresh?.referralSignups || 0,
-            // Cuánto gana por cada plan (para mostrarlo en el panel)
+            // Cuánto gana por cada plan a la venta (solo los planes vigentes)
             earnings: {
-                monthly:   { price: prices.monthly,   commission: +(prices.monthly * rates.monthly).toFixed(2),     recurrente: true },
-                quarterly: { price: prices.quarterly, commission: +(prices.quarterly * rates.quarterly).toFixed(2), recurrente: true },
-                yearly:    { price: prices.yearly,    commission: +(prices.yearly * rates.yearly).toFixed(2),       recurrente: true },
-                lifetime:  { price: prices.lifetime,  commission: flatCommissions.lifetime,                         recurrente: false }
+                monthly:  { price: prices.monthly,  commission: +(prices.monthly * rates.monthly).toFixed(2), recurrente: true },
+                lifetime: { price: prices.lifetime, commission: flatCommissions.lifetime,                     recurrente: false }
             }
         });
     } catch (err) {

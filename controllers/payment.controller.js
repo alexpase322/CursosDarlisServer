@@ -8,7 +8,7 @@ const {
     onReferredSubscriptionCanceled,
     voidCommissionByInvoiceId
 } = require('../services/commissionService');
-const { inferPlan, planFromStripePriceId, isOneTimePlan, prices } = require('../config/affiliateConfig');
+const { inferPlan, planFromStripePriceId, isOneTimePlan, legacyPlans, prices } = require('../config/affiliateConfig');
 const { resolveReferralCode, ensureReferralCode } = require('../services/referralService');
 const { sendInvitation } = require('../services/invitationService');
 const { sendToAdmins } = require('../services/pushService');
@@ -53,6 +53,15 @@ const createCheckoutSession = async (req, res) => {
 
         // ¿Es un plan de pago único (lifetime) o una suscripción?
         const planFromPrice = planFromStripePriceId(priceId);
+
+        // Bloquear planes descontinuados (trimestral/anual): ya no se venden.
+        // Las alumnas que ya los tienen siguen renovando sin problema.
+        if (planFromPrice && legacyPlans.includes(planFromPrice)) {
+            return res.status(410).json({
+                message: 'Este plan ya no está disponible. Elige el plan mensual o el pago único.'
+            });
+        }
+
         const oneTime = isOneTimePlan(planFromPrice);
 
         const metadata = {};
