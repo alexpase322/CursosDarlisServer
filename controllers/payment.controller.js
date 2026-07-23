@@ -16,6 +16,15 @@ const { getQuarterlyPromo } = require('../services/promoService');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// 0. Config pública de precios (para que el frontend sepa qué Price IDs usar
+//    sin depender de variables VITE_* horneadas en el build).
+const getPaymentConfig = (req, res) => {
+    res.json({
+        monthly: process.env.STRIPE_PRICE_MONTHLY || null,
+        lifetime: process.env.STRIPE_PRICE_LIFETIME || null
+    });
+};
+
 // 1. Crear Sesión de Checkout (Redirige al usuario a Stripe)
 const createCheckoutSession = async (req, res) => {
     const { priceId, email, referralCode } = req.body;
@@ -51,8 +60,25 @@ const createCheckoutSession = async (req, res) => {
             }
         }
 
-        // ¿Es un plan de pago único (lifetime) o una suscripción?
-        const planFromPrice = planFromStripePriceId(priceId);
+        // Consultar el precio directo en Stripe (fuente de verdad). Así el sistema
+        // funciona aunque STRIPE_PRICE_LIFETIME no esté seteado en el servidor:
+        // Stripe nos dice si es pago único (type:'one_time') o suscripción.
+        let stripePrice = null;
+        try {
+            stripePrice = await stripe.prices.retrieve(priceId);
+        } catch (e) {
+            return res.status(400).json({ message: 'El plan seleccionado no es válido.' });
+        }
+        if (!stripePrice || stripePrice.active === false) {
+            return res.status(400).json({ message: 'Este plan no está disponible.' });
+        }
+
+        const oneTime = stripePrice.type === 'one_time' || !stripePrice.recurring;
+        const amountUSD = stripePrice.unit_amount != null ? stripePrice.unit_amount / 100 : null;
+
+        // Deducir el nombre del plan: primero por el map de .env, si no por el precio.
+        const planFromPrice = planFromStripePriceId(priceId)
+            || inferPlan({ priceId, lineItem: { price: stripePrice }, amountUSD });
 
         // Bloquear planes descontinuados (trimestral/anual): ya no se venden.
         // Las alumnas que ya los tienen siguen renovando sin problema.
@@ -62,13 +88,12 @@ const createCheckoutSession = async (req, res) => {
             });
         }
 
-        const oneTime = isOneTimePlan(planFromPrice);
-
         const metadata = {};
         if (userIdForMetadata) metadata.userId = userIdForMetadata;
         if (affiliateId) metadata.affiliateId = affiliateId;
         if (affiliateCode) metadata.referralCode = affiliateCode;
-        if (planFromPrice) metadata.plan = planFromPrice;
+        // Si es pago único y no logramos nombrar el plan, asumimos 'lifetime'.
+        metadata.plan = planFromPrice || (oneTime ? 'lifetime' : 'monthly');
 
         const sessionConfig = {
             payment_method_types: ['card'],
@@ -739,4 +764,4 @@ const createBillingPortalSession = async (req, res) => {
     }
 };
 
-module.exports = { createCheckoutSession, stripeWebhook, createBillingPortalSession };
+module.exports = { getPaymentConfig, createCheckoutSession, stripeWebhook, createBillingPortalSession };

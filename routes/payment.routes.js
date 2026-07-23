@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { createCheckoutSession, stripeWebhook, createBillingPortalSession } = require('../controllers/payment.controller');
+const { getPaymentConfig, createCheckoutSession, stripeWebhook, createBillingPortalSession } = require('../controllers/payment.controller');
 const { protect } = require('../middleware/authMiddleware');
-const expressRaw = require('express'); // Necesario para el webhook
+
+// Config pública de precios (Price IDs vigentes, sin depender del build)
+router.get('/config', getPaymentConfig);
 
 // Ruta para el frontend (Crear link de pago)
 router.post('/create-checkout-session', createCheckoutSession);
