@@ -33,12 +33,21 @@ const prices = {
 const oneTimePlans = ['lifetime'];
 const isOneTimePlan = (plan) => oneTimePlans.includes(plan);
 
+// Price IDs de lifetime CONOCIDOS (además del que esté en STRIPE_PRICE_LIFETIME).
+// Se pueden tener varios precios de $247 para el mismo producto de pago único.
+// Añadir aquí cualquier price nuevo de pago único garantiza detección exacta.
+const KNOWN_LIFETIME_PRICE_IDS = [
+    'price_1TwRRIDP5qCZDXVtNjnVkXkn'
+];
+
 const stripePriceMap = {
     [process.env.STRIPE_PRICE_MONTHLY   || '__unset_monthly__']:   'monthly',
     [process.env.STRIPE_PRICE_QUARTERLY || '__unset_quarterly__']: 'quarterly',
     [process.env.STRIPE_PRICE_YEARLY    || '__unset_yearly__']:    'yearly',
     [process.env.STRIPE_PRICE_LIFETIME  || '__unset_lifetime__']:  'lifetime'
 };
+// Registrar los lifetime conocidos en el mapa.
+for (const id of KNOWN_LIFETIME_PRICE_IDS) stripePriceMap[id] = 'lifetime';
 
 const promotion = {
     n2ToN3: { activeReferralsRequired: 40 }

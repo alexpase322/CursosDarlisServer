@@ -16,7 +16,7 @@ const paymentSchema = new mongoose.Schema({
     stripeSubscriptionId: { type: String, index: true, sparse: true },
     plan: {
         type: String,
-        enum: ['monthly', 'quarterly', 'yearly'],
+        enum: ['monthly', 'quarterly', 'yearly', 'lifetime'],
         default: 'monthly'
     },
     amountUSD: { type: Number, default: 0 },
@@ -25,6 +25,9 @@ const paymentSchema = new mongoose.Schema({
         enum: ['paid', 'refunded', 'failed'],
         default: 'paid'
     },
+    // Origen del pago: stripe (por checkout), transfer/beacons/cash/other (manual).
+    method: { type: String, default: 'stripe' },
+    note: { type: String, default: '' },
     paidAt: { type: Date, default: Date.now },
     refundedAt: { type: Date, default: null },
     failedAt: { type: Date, default: null },

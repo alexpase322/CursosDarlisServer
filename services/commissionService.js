@@ -101,6 +101,11 @@ async function recordCommissionFromManualPayment(payment) {
     }
     const { amountUSD: commissionAmountUSD, percent: commissionPercent } = calc;
 
+    // Si el pago fue por Beacons, Beacons ya le paga la comisión a la afiliada.
+    // Aquí la registramos SOLO para trazabilidad: nace como 'paid' (externa),
+    // no como 'available', para que no aparezca como algo que NOSOTROS debemos pagar.
+    const isBeacons = payment.method === 'beacons';
+
     let commission;
     try {
         commission = await Commission.create({
@@ -114,7 +119,10 @@ async function recordCommissionFromManualPayment(payment) {
             commissionAmountUSD,
             periodStart: payment.paidAt || null,
             periodEnd: null,
-            status: 'available'
+            status: isBeacons ? 'paid' : 'available',
+            payoutSource: isBeacons ? 'beacons' : 'internal',
+            paidAt: isBeacons ? (payment.paidAt || new Date()) : undefined,
+            paidNote: isBeacons ? 'Pagada por Beacons (externo)' : ''
         });
     } catch (err) {
         if (err.code === 11000) return await Commission.findOne({ stripeInvoiceId: payment.stripeInvoiceId });
@@ -123,7 +131,12 @@ async function recordCommissionFromManualPayment(payment) {
 
     affiliate.referralStats = affiliate.referralStats || {};
     affiliate.referralStats.totalEarnedUSD = (affiliate.referralStats.totalEarnedUSD || 0) + commissionAmountUSD;
-    affiliate.referralStats.pendingUSD = (affiliate.referralStats.pendingUSD || 0) + commissionAmountUSD;
+    if (isBeacons) {
+        // Ya cobrada (por Beacons) → va directo a paidUSD, no a pendingUSD.
+        affiliate.referralStats.paidUSD = (affiliate.referralStats.paidUSD || 0) + commissionAmountUSD;
+    } else {
+        affiliate.referralStats.pendingUSD = (affiliate.referralStats.pendingUSD || 0) + commissionAmountUSD;
+    }
     await affiliate.save();
 
     await evaluateAutoPromotion(affiliate);

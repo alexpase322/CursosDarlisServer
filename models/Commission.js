@@ -21,7 +21,7 @@ const commissionSchema = new mongoose.Schema({
     stripeSubscriptionId: { type: String },
     plan: {
         type: String,
-        enum: ['monthly', 'quarterly', 'yearly'],
+        enum: ['monthly', 'quarterly', 'yearly', 'lifetime'],
         required: true
     },
     grossAmountUSD: { type: Number, required: true },
@@ -33,6 +33,15 @@ const commissionSchema = new mongoose.Schema({
         type: String,
         enum: ['pending', 'available', 'paid', 'voided'],
         default: 'available'
+    },
+    // Quién paga la comisión a la afiliada:
+    //   internal → la pagamos nosotros (transferencia manual)
+    //   beacons  → la paga Beacons externamente (solo trazabilidad aquí)
+    //   stripe   → venta por Stripe checkout (la pagamos nosotros)
+    payoutSource: {
+        type: String,
+        enum: ['internal', 'beacons', 'stripe'],
+        default: 'internal'
     },
     paidAt: { type: Date },
     paidNote: { type: String, default: '' }

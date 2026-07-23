@@ -119,7 +119,7 @@ const listSubscriptions = async (req, res) => {
 // pueda solicitar afiliarse. Crea un Payment con id sintético `manual_<userId>_<ts>` y,
 // opcionalmente, sincroniza User.subscription para que el panel la muestre como activa.
 const PLAN_DURATIONS_DAYS = { monthly: 30, quarterly: 90, yearly: 365 };
-const PLAN_PRICES_USD = { monthly: 50, quarterly: 120, yearly: 397 };
+const PLAN_PRICES_USD = { monthly: 50, quarterly: 120, yearly: 397, lifetime: 247 };
 
 const registerManualPayment = async (req, res) => {
     try {
@@ -133,7 +133,7 @@ const registerManualPayment = async (req, res) => {
             updateSubscription = true
         } = req.body || {};
 
-        if (!['monthly', 'quarterly', 'yearly'].includes(plan)) {
+        if (!['monthly', 'quarterly', 'yearly', 'lifetime'].includes(plan)) {
             return res.status(400).json({ message: 'Plan inválido' });
         }
 
@@ -142,6 +142,7 @@ const registerManualPayment = async (req, res) => {
 
         const paid = paidAt ? new Date(paidAt) : new Date();
         const amt = Number.isFinite(Number(amountUSD)) ? Number(amountUSD) : PLAN_PRICES_USD[plan];
+        const isLifetime = plan === 'lifetime';
 
         const invoiceId = `manual_${user._id}_${paid.getTime()}`;
 
@@ -151,21 +152,47 @@ const registerManualPayment = async (req, res) => {
             plan,
             amountUSD: amt,
             status: 'paid',
+            method,
+            note,
             paidAt: paid
         });
 
         if (updateSubscription) {
-            const days = PLAN_DURATIONS_DAYS[plan] || 30;
-            const periodEnd = new Date(paid.getTime() + days * 24 * 60 * 60 * 1000);
-            user.subscription = {
-                ...(user.subscription || {}),
-                id: user.subscription?.id || `manual_${user._id}`,
-                status: 'active',
-                plan,
-                currentPeriodEnd: periodEnd,
-                customerId: user.subscription?.customerId
-            };
-            await user.save();
+            if (isLifetime) {
+                // Pago único: acceso de por vida + activación como Partner.
+                user.lifetimeAccess = true;
+                user.lifetimeGrantedAt = user.lifetimeGrantedAt || paid;
+                user.subscription = {
+                    ...(user.subscription || {}),
+                    id: user.subscription?.id || `lifetime_${user._id}`,
+                    status: 'active',
+                    plan: 'lifetime',
+                    currentPeriodEnd: null,   // nunca vence
+                    customerId: user.subscription?.customerId
+                };
+                if ((user.partnerLevel || 1) < 2) {
+                    user.partnerLevel = 2;
+                    user.partnerActivatedAt = user.partnerActivatedAt || paid;
+                }
+                await user.save();
+                // Generar su link de afiliada
+                try {
+                    const { ensureReferralCode } = require('../services/referralService');
+                    await ensureReferralCode(user);
+                } catch (e) { console.error('[manual lifetime] referralCode', e.message); }
+            } else {
+                const days = PLAN_DURATIONS_DAYS[plan] || 30;
+                const periodEnd = new Date(paid.getTime() + days * 24 * 60 * 60 * 1000);
+                user.subscription = {
+                    ...(user.subscription || {}),
+                    id: user.subscription?.id || `manual_${user._id}`,
+                    status: 'active',
+                    plan,
+                    currentPeriodEnd: periodEnd,
+                    customerId: user.subscription?.customerId
+                };
+                await user.save();
+            }
         }
 
         // Si la alumna tiene referidora, generar comisión del pago manual.
@@ -184,7 +211,9 @@ const registerManualPayment = async (req, res) => {
             commission: commission ? {
                 _id: commission._id,
                 amountUSD: commission.commissionAmountUSD,
-                affiliate: commission.affiliate
+                affiliate: commission.affiliate,
+                payoutSource: commission.payoutSource,   // 'beacons' = ya pagada externamente
+                status: commission.status
             } : null,
             user: { _id: user._id, subscription: user.subscription },
             meta: { method, note }
