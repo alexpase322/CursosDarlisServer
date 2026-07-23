@@ -96,13 +96,21 @@ const createCheckoutSession = async (req, res) => {
         metadata.plan = planFromPrice || (oneTime ? 'lifetime' : 'monthly');
 
         const sessionConfig = {
-            payment_method_types: ['card'],
+            // NO fijamos payment_method_types: dejamos que Stripe muestre TODOS los
+            // métodos habilitados en tu cuenta (tarjeta, wallets, etc.) según moneda
+            // y país de la clienta — "dynamic payment methods".
             line_items: [{ price: priceId, quantity: 1 }],
             mode: oneTime ? 'payment' : 'subscription',
             success_url: `${process.env.FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${process.env.FRONTEND_URL}/#planes`,
             metadata
         };
+
+        // Si defines una Payment Method Configuration en Stripe (pmc_...), la usamos.
+        // Si no, Stripe aplica la configuración por defecto de tu cuenta.
+        if (process.env.STRIPE_PAYMENT_METHOD_CONFIGURATION) {
+            sessionConfig.payment_method_configuration = process.env.STRIPE_PAYMENT_METHOD_CONFIGURATION;
+        }
 
         // La metadata también se copia a la suscripción (solo aplica en mode:'subscription').
         if (!oneTime && Object.keys(metadata).length > 0) {
