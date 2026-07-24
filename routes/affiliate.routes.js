@@ -7,6 +7,7 @@ const {
     getMyReferrals,
     applyForPartner,
     getMyReferralLink,
+    updateMyReferralCode,
     resolveAndTrackCode
 } = require('../controllers/affiliate.controller');
 
@@ -25,6 +26,7 @@ router.get('/r/:code', resolveAndTrackCode);
 
 router.get('/me', protect, partnerOnly, getMyAffiliateSummary);
 router.get('/me/link', protect, partnerOnly, getMyReferralLink);
+router.put('/me/link', protect, partnerOnly, updateMyReferralCode);
 router.get('/me/commissions', protect, partnerOnly, getMyCommissions);
 router.get('/me/referrals', protect, partnerOnly, getMyReferrals);
 router.post('/apply', protect, applyForPartner);

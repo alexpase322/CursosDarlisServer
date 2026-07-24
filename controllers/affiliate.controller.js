@@ -5,6 +5,8 @@ const Payment = require('../models/Payment');
 const { rates, prices, flatCommissions } = require('../config/affiliateConfig');
 const {
     ensureReferralCode,
+    regenerateReferralCode,
+    setCustomReferralCode,
     resolveReferralCode,
     buildReferralLink
 } = require('../services/referralService');
@@ -211,6 +213,27 @@ const getMyReferralLink = async (req, res) => {
     }
 };
 
+// PUT /affiliate/me/link — regenerar o personalizar mi código.
+// body: { customCode?: string }  → si viene, lo personaliza; si no, regenera desde el nombre.
+const updateMyReferralCode = async (req, res) => {
+    try {
+        const { customCode } = req.body || {};
+
+        if (customCode && typeof customCode === 'string' && customCode.trim()) {
+            const r = await setCustomReferralCode(req.user._id, customCode);
+            if (!r.ok) return res.status(400).json({ message: r.message || 'Código inválido' });
+            return res.json({ code: r.code, link: buildReferralLink(r.code) });
+        }
+
+        const code = await regenerateReferralCode(req.user._id);
+        if (!code) return res.status(404).json({ message: 'No encontrado' });
+        res.json({ code, link: buildReferralLink(code) });
+    } catch (err) {
+        console.error('updateMyReferralCode', err);
+        res.status(500).json({ message: 'Error al actualizar tu código' });
+    }
+};
+
 // GET /affiliate/r/:code — público. Resuelve el código y cuenta el clic.
 const resolveAndTrackCode = async (req, res) => {
     try {
@@ -242,5 +265,6 @@ module.exports = {
     getMyReferrals,
     applyForPartner,
     getMyReferralLink,
+    updateMyReferralCode,
     resolveAndTrackCode
 };

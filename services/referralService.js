@@ -55,6 +55,38 @@ async function ensureReferralCode(userOrId) {
     }
 }
 
+// Regenera el código desde el nombre actual de la usuaria (sobrescribe el existente).
+async function regenerateReferralCode(userId) {
+    const user = await User.findById(userId);
+    if (!user) return null;
+    const code = await generateUniqueCode(user.username || user.email);
+    await User.updateOne({ _id: user._id }, { $set: { referralCode: code } });
+    return code;
+}
+
+// Fija un código PERSONALIZADO. Devuelve { ok, code } o { ok:false, reason }.
+async function setCustomReferralCode(userId, rawCode) {
+    const slug = slugify(rawCode);
+    if (!slug || slug === 'partner') {
+        return { ok: false, reason: 'invalid', message: 'Código inválido. Usa letras, números o guiones.' };
+    }
+    if (slug.length < 3 || slug.length > 40) {
+        return { ok: false, reason: 'length', message: 'El código debe tener entre 3 y 40 caracteres.' };
+    }
+    // ¿Lo tiene otra persona?
+    const taken = await User.findOne({ referralCode: slug }).select('_id').lean();
+    if (taken && String(taken._id) !== String(userId)) {
+        return { ok: false, reason: 'taken', message: 'Ese código ya está en uso. Elige otro.' };
+    }
+    try {
+        await User.updateOne({ _id: userId }, { $set: { referralCode: slug } });
+        return { ok: true, code: slug };
+    } catch (err) {
+        if (err.code === 11000) return { ok: false, reason: 'taken', message: 'Ese código ya está en uso. Elige otro.' };
+        throw err;
+    }
+}
+
 // Resuelve un código → afiliada válida (debe ser Partner N2+ y estar activa).
 async function resolveReferralCode(code) {
     if (!code || typeof code !== 'string') return null;
@@ -94,6 +126,8 @@ const buildReferralLink = (code) => {
 
 module.exports = {
     ensureReferralCode,
+    regenerateReferralCode,
+    setCustomReferralCode,
     resolveReferralCode,
     backfillReferralCodes,
     buildReferralLink,
