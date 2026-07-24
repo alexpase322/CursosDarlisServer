@@ -215,4 +215,83 @@ async function deleteUserCascade(userId, opts = {}) {
     return { ok: true, stats };
 }
 
-module.exports = { deleteUserCascade, recomputeAffiliateStats };
+/**
+ * Anula las comisiones HUÉRFANAS: aquellas cuya afiliada o cuya referida ya
+ * no existe en la base de datos (fueron eliminadas antes de que existiera el
+ * borrado en cascada). Se ven en el panel como "—" pero seguían contando
+ * como dinero por pagar.
+ *
+ * @param {object} opts { dryRun = false } — con dryRun solo reporta, no modifica.
+ */
+async function voidOrphanCommissions(opts = {}) {
+    const { dryRun = false } = opts;
+
+    // Solo revisamos las que aún cuentan como dinero vivo.
+    const live = await Commission.find({ status: { $ne: 'voided' } })
+        .select('_id affiliate referredUser commissionAmountUSD status')
+        .lean();
+
+    if (live.length === 0) {
+        return { scanned: 0, voided: 0, missingAffiliate: 0, missingReferred: 0, affiliatesRecalculated: 0, amountVoidedUSD: 0 };
+    }
+
+    // Qué usuarios referenciados existen realmente.
+    const referencedIds = new Set();
+    for (const c of live) {
+        if (c.affiliate) referencedIds.add(String(c.affiliate));
+        if (c.referredUser) referencedIds.add(String(c.referredUser));
+    }
+    const existing = await User.find({ _id: { $in: [...referencedIds] } }).select('_id').lean();
+    const existingSet = new Set(existing.map(u => String(u._id)));
+
+    const toVoid = [];
+    let missingAffiliate = 0;
+    let missingReferred = 0;
+    const affectedAffiliates = new Set();
+
+    for (const c of live) {
+        const affOk = c.affiliate && existingSet.has(String(c.affiliate));
+        const refOk = c.referredUser && existingSet.has(String(c.referredUser));
+        if (affOk && refOk) continue;
+
+        if (!affOk) missingAffiliate += 1;
+        if (!refOk) missingReferred += 1;
+        toVoid.push(c);
+        // Si la afiliada SÍ existe (huérfana solo por la referida), hay que recalcular sus stats.
+        if (affOk) affectedAffiliates.add(String(c.affiliate));
+    }
+
+    const amountVoidedUSD = +toVoid
+        .reduce((s, c) => s + (c.commissionAmountUSD || 0), 0)
+        .toFixed(2);
+
+    const stats = {
+        scanned: live.length,
+        voided: toVoid.length,
+        missingAffiliate,
+        missingReferred,
+        amountVoidedUSD,
+        affiliatesRecalculated: 0,
+        dryRun
+    };
+
+    if (dryRun || toVoid.length === 0) return stats;
+
+    await Commission.updateMany(
+        { _id: { $in: toVoid.map(c => c._id) } },
+        { $set: { status: 'voided', paidNote: 'Anulada: usuaria eliminada' } }
+    );
+
+    for (const affId of affectedAffiliates) {
+        try {
+            await recomputeAffiliateStats(affId);
+            stats.affiliatesRecalculated += 1;
+        } catch (e) {
+            console.error('[voidOrphanCommissions] recompute', affId, e.message);
+        }
+    }
+
+    return stats;
+}
+
+module.exports = { deleteUserCascade, recomputeAffiliateStats, voidOrphanCommissions };

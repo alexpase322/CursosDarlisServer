@@ -5,6 +5,7 @@ const { setLevelManually } = require('../services/levelService');
 const { backfillCommissionsForUser } = require('../services/commissionService');
 const { safeSearchRegex } = require('../middleware/security');
 const { ensureReferralCode, backfillReferralCodes } = require('../services/referralService');
+const { voidOrphanCommissions } = require('../services/userDeletionService');
 
 // GET /admin/affiliates  — listado paginado con filtros
 const listAffiliates = async (req, res) => {
@@ -180,6 +181,17 @@ const markCommissionPaid = async (req, res) => {
         if (commission.status === 'paid') return res.status(400).json({ message: 'Ya está pagada' });
         if (commission.status === 'voided') return res.status(400).json({ message: 'Está anulada' });
 
+        // No se puede pagar una comisión huérfana (afiliada o referida eliminada).
+        const [affExists, refExists] = await Promise.all([
+            User.exists({ _id: commission.affiliate }),
+            User.exists({ _id: commission.referredUser })
+        ]);
+        if (!affExists || !refExists) {
+            return res.status(409).json({
+                message: 'Comisión huérfana: la afiliada o la referida ya no existe. Usa "Recalcular comisiones" para anularla.'
+            });
+        }
+
         commission.status = 'paid';
         commission.paidAt = new Date();
         commission.paidNote = req.body.note || '';
@@ -329,6 +341,15 @@ const recalculateCommissions = async (req, res) => {
             }
         }
 
+        // Anular comisiones huérfanas (afiliada o referida ya eliminada).
+        // Deben dejar de contar como dinero por pagar.
+        let orphans = { voided: 0, amountVoidedUSD: 0 };
+        try {
+            orphans = await voidOrphanCommissions();
+        } catch (err) {
+            console.error('recalc orphans:', err.message);
+        }
+
         // Recalcular `referralStats` agregadas de cada afiliada con base en sus Commissions.
         const affiliates = await User.find({ partnerLevel: { $gte: 2 } }).select('_id');
         for (const aff of affiliates) {
@@ -351,7 +372,12 @@ const recalculateCommissions = async (req, res) => {
 
         res.json({
             ok: true,
-            stats: { processedUsers, totalCreated, totalSkipped, errors, affiliatesRecalculated: affiliates.length }
+            stats: {
+                processedUsers, totalCreated, totalSkipped, errors,
+                affiliatesRecalculated: affiliates.length,
+                orphansVoided: orphans.voided || 0,
+                orphansAmountUSD: orphans.amountVoidedUSD || 0
+            }
         });
     } catch (err) {
         console.error('recalculateCommissions', err);
