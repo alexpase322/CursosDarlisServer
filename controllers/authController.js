@@ -307,7 +307,7 @@ const listPublicAffiliates = async (req, res) => {
         const affiliates = await User.find({
             $and: [eligibleAffiliateFilter(), { status: 'active' }]
         })
-            .select('_id username avatar partnerLevel')
+            .select('_id username avatar partnerLevel role')
             .sort({ username: 1 });
         res.json(affiliates);
     } catch (error) {

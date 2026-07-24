@@ -11,6 +11,7 @@ const Payment = require('../models/Payment');
 const Commission = require('../models/Commission');
 const { rates } = require('../config/affiliateConfig');
 const { evaluateMilestones } = require('../services/engagementService');
+const { isEligibleAffiliate } = require('../services/referralService');
 
 // Recalcula referralStats almacenados desde la verdad: Users + Commissions.
 async function recomputeAffiliateStats(affiliateId) {
@@ -55,10 +56,13 @@ const reassignReferrer = async (req, res) => {
             if (String(referrerId) === String(userId)) {
                 return res.status(400).json({ message: 'No puede ser su propia referidora' });
             }
-            newReferrer = await User.findById(referrerId).select('username email partnerLevel status');
+            newReferrer = await User.findById(referrerId).select('username email partnerLevel status role');
             if (!newReferrer) return res.status(404).json({ message: 'Nueva referidora no encontrada' });
-            if (newReferrer.partnerLevel < 2) {
-                return res.status(400).json({ message: 'La nueva referidora debe ser Partner (nivel 2 o superior)' });
+            // Elegibles: Partners N2+ y administradoras (también refieren y cobran).
+            if (!isEligibleAffiliate(newReferrer)) {
+                return res.status(400).json({
+                    message: 'La nueva referidora debe ser Partner (nivel 2 o superior) o administradora'
+                });
             }
         }
 
