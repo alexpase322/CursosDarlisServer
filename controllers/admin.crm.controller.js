@@ -4,21 +4,28 @@ const PartnerApplication = require('../models/PartnerApplication');
 const { setLevelManually } = require('../services/levelService');
 const { backfillCommissionsForUser } = require('../services/commissionService');
 const { safeSearchRegex } = require('../middleware/security');
-const { ensureReferralCode, backfillReferralCodes } = require('../services/referralService');
+const { ensureReferralCode, backfillReferralCodes, eligibleAffiliateFilter } = require('../services/referralService');
 const { voidOrphanCommissions } = require('../services/userDeletionService');
 
 // GET /admin/affiliates  — listado paginado con filtros
 const listAffiliates = async (req, res) => {
     try {
         const { level, q, sort = '-referralStats.pendingUSD', page = 1, limit = 20 } = req.query;
-        const filter = { partnerLevel: { $gte: 2 } };
-        if (level) filter.partnerLevel = parseInt(level);
+
+        // Elegibles: Partners N2+ y administradoras (que también venden y cobran).
+        // Se combinan con $and porque tanto el criterio de elegibilidad como la
+        // búsqueda usan $or y se sobrescribirían entre sí.
+        const conditions = [eligibleAffiliateFilter()];
+        if (level) conditions.push({ partnerLevel: parseInt(level) });
         if (q) {
-            filter.$or = [
-                { username: safeSearchRegex(q) },
-                { email: safeSearchRegex(q) }
-            ];
+            conditions.push({
+                $or: [
+                    { username: safeSearchRegex(q) },
+                    { email: safeSearchRegex(q) }
+                ]
+            });
         }
+        const filter = conditions.length > 1 ? { $and: conditions } : conditions[0];
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [users, total] = await Promise.all([
             User.find(filter)
@@ -351,7 +358,7 @@ const recalculateCommissions = async (req, res) => {
         }
 
         // Recalcular `referralStats` agregadas de cada afiliada con base en sus Commissions.
-        const affiliates = await User.find({ partnerLevel: { $gte: 2 } }).select('_id');
+        const affiliates = await User.find(eligibleAffiliateFilter()).select('_id');
         for (const aff of affiliates) {
             const agg = await Commission.aggregate([
                 { $match: { affiliate: aff._id } },

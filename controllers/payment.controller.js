@@ -9,7 +9,7 @@ const {
     voidCommissionByInvoiceId
 } = require('../services/commissionService');
 const { inferPlan, planFromStripePriceId, isOneTimePlan, legacyPlans, prices } = require('../config/affiliateConfig');
-const { resolveReferralCode, ensureReferralCode } = require('../services/referralService');
+const { resolveReferralCode, ensureReferralCode, isEligibleAffiliate } = require('../services/referralService');
 const { sendInvitation } = require('../services/invitationService');
 const { sendToAdmins } = require('../services/pushService');
 const { getQuarterlyPromo } = require('../services/promoService');
@@ -231,8 +231,9 @@ const handleOneTimePurchase = async (session) => {
     // 3) Atribuir la afiliada que la refirió (solo si aún no tiene una)
     if (!user.referredBy && meta.affiliateId) {
         try {
-            const affiliate = await User.findById(meta.affiliateId).select('_id partnerLevel');
-            if (affiliate && String(affiliate._id) !== String(user._id) && affiliate.partnerLevel >= 2) {
+            const affiliate = await User.findById(meta.affiliateId).select('_id partnerLevel role');
+            // Elegible: Partner N2+ o administradora. Nunca a sí misma.
+            if (affiliate && String(affiliate._id) !== String(user._id) && isEligibleAffiliate(affiliate)) {
                 user.referredBy = affiliate._id;
             }
         } catch { /* noop */ }

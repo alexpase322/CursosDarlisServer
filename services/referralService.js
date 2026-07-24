@@ -4,6 +4,17 @@
 const crypto = require('crypto');
 const User = require('../models/User');
 
+// Criterio ÚNICO de quién puede ser afiliada y cobrar comisión:
+// las Partners (nivel 2+) y también las administradoras (que venden igual).
+// Se usa en todo el sistema para no tener reglas contradictorias.
+const isEligibleAffiliate = (user) =>
+    !!user && (user.role === 'admin' || (user.partnerLevel || 1) >= 2);
+
+// Filtro Mongo equivalente al criterio de arriba.
+const eligibleAffiliateFilter = () => ({
+    $or: [{ role: 'admin' }, { partnerLevel: { $gte: 2 } }]
+});
+
 // Convierte "María José Pérez" → "maria-jose-perez"
 function slugify(text) {
     return String(text || '')
@@ -93,18 +104,21 @@ async function resolveReferralCode(code) {
     const clean = code.trim().toLowerCase().slice(0, 60);
     if (!clean) return null;
     const user = await User.findOne({ referralCode: clean })
-        .select('username avatar partnerLevel status referralCode')
+        .select('username avatar partnerLevel status role referralCode')
         .lean();
     if (!user) return null;
-    if ((user.partnerLevel || 1) < 2) return null; // solo afiliadas activas
+    // Partners (N2+) y administradoras pueden referir.
+    if (!isEligibleAffiliate(user)) return null;
     return user;
 }
 
 // Genera códigos para todas las afiliadas N2+ que aún no lo tengan.
 async function backfillReferralCodes() {
     const partners = await User.find({
-        partnerLevel: { $gte: 2 },
-        $or: [{ referralCode: null }, { referralCode: { $exists: false } }]
+        $and: [
+            eligibleAffiliateFilter(),   // Partners N2+ y admins
+            { $or: [{ referralCode: null }, { referralCode: { $exists: false } }] }
+        ]
     }).select('_id username email').lean();
 
     let created = 0;
@@ -131,5 +145,7 @@ module.exports = {
     resolveReferralCode,
     backfillReferralCodes,
     buildReferralLink,
-    slugify
+    slugify,
+    isEligibleAffiliate,
+    eligibleAffiliateFilter
 };

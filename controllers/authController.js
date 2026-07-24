@@ -8,6 +8,7 @@ const cloudinary = require('../config/cloudinary');
 const fs = require('fs');
 const crypto = require('crypto');
 const { sendInvitation } = require('../services/invitationService');
+const { isEligibleAffiliate, eligibleAffiliateFilter } = require('../services/referralService');
 const { backfillCommissionsForUser, onReferredSubscriptionActivated } = require('../services/commissionService');
 const validator = require('validator');
 
@@ -175,10 +176,11 @@ const completeProfile = async (req, res) => {
             user.password = await bcrypt.hash(req.body.password, salt);
         }
 
-        // Atribución de la referidora (opcional). Solo válido si la referida es N2+ y activa.
+        // Atribución de la referidora (opcional). Válido si es Partner N2+ o admin, y está activa.
         if (req.body.referredBy) {
-            const referrer = await User.findById(req.body.referredBy).select('partnerLevel status');
-            if (referrer && referrer.partnerLevel >= 2 && referrer.status === 'active') {
+            const referrer = await User.findById(req.body.referredBy).select('partnerLevel status role');
+            if (referrer && isEligibleAffiliate(referrer) && referrer.status === 'active'
+                && String(referrer._id) !== String(user._id)) {
                 user.referredBy = referrer._id;
             }
         }
@@ -301,9 +303,9 @@ const resetPassword = async (req, res) => {
 // @route   GET /auth/affiliates-public
 const listPublicAffiliates = async (req, res) => {
     try {
+        // Elegibles: Partners N2+ y administradoras (también refieren y cobran).
         const affiliates = await User.find({
-            partnerLevel: { $gte: 2 },
-            status: 'active'
+            $and: [eligibleAffiliateFilter(), { status: 'active' }]
         })
             .select('_id username avatar partnerLevel')
             .sort({ username: 1 });
