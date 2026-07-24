@@ -4,6 +4,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const {
     recordCommissionFromInvoice,
     recordCommissionForOneTimeSale,
+    backfillCommissionsForUser,
     onReferredSubscriptionActivated,
     onReferredSubscriptionCanceled,
     voidCommissionByInvoiceId
@@ -369,6 +370,19 @@ const handleCheckoutSuccess = async (session) => {
         return;
     }
 
+    // Atribuir la afiliada que la refirió (llegó por su link /r/<codigo>).
+    // Solo si aún no tiene referidora, para no robarle la referida a otra.
+    const meta = session.metadata || {};
+    if (!user.referredBy && meta.affiliateId) {
+        try {
+            const affiliate = await User.findById(meta.affiliateId).select('_id partnerLevel role');
+            if (affiliate && String(affiliate._id) !== String(user._id) && isEligibleAffiliate(affiliate)) {
+                user.referredBy = affiliate._id;
+                console.log(`[checkout] referida atribuida a ${affiliate._id} (código ${meta.referralCode || '-'})`);
+            }
+        } catch (e) { console.error('[checkout] atribución:', e.message); }
+    }
+
     const wasInactive = !user.subscription || user.subscription.status !== 'active';
 
     user.subscription = {
@@ -384,6 +398,15 @@ const handleCheckoutSuccess = async (session) => {
 
     if (wasInactive && (subscription.status === 'active' || subscription.status === 'trialing')) {
         await onReferredSubscriptionActivated(user);
+    }
+
+    // Red de seguridad: Stripe puede mandar `invoice.payment_succeeded` ANTES que
+    // `checkout.session.completed`. En ese caso la comisión no se creó porque el
+    // usuario aún no tenía `referredBy`. El backfill la genera ahora.
+    if (user.referredBy) {
+        backfillCommissionsForUser(user)
+            .then(r => { if (r?.created) console.log(`[checkout] backfill comisiones: ${r.created}`); })
+            .catch(e => console.error('[checkout] backfill:', e.message));
     }
 
     console.log(`[checkout] Usuario ${user._id} suscrito (${plan || 'plan?'}). Estado: ${subscription.status}${promoApplied ? ` · +${promoApplied.extraMonths}m promo` : ''}`);

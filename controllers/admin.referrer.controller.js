@@ -9,7 +9,7 @@
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const Commission = require('../models/Commission');
-const { rates } = require('../config/affiliateConfig');
+const { calculateCommission } = require('../config/affiliateConfig');
 const { evaluateMilestones } = require('../services/engagementService');
 const { isEligibleAffiliate } = require('../services/referralService');
 
@@ -118,11 +118,20 @@ const reassignReferrer = async (req, res) => {
                 if (exists) continue;
 
                 const plan = p.plan || 'monthly';
-                const rate = rates[plan];
-                if (!rate) continue;
+                // Usar calculateCommission: soporta tanto % (mensual) como monto
+                // fijo (lifetime → $197). Antes se usaba rates[plan], que es
+                // undefined para lifetime y saltaba el pago sin crear comisión.
+                const calc = calculateCommission(plan, p.amountUSD);
+                if (!calc) {
+                    console.warn(`[reassign] plan ${plan} sin comisión definida; skip ${p.stripeInvoiceId}`);
+                    continue;
+                }
+
+                // Beacons paga la comisión por su cuenta → nace 'paid' (trazabilidad).
+                // Cualquier otro origen (link de referida, Stripe, transferencia) → 'available'.
+                const isBeacons = p.method === 'beacons';
 
                 try {
-                    const commissionAmountUSD = +(p.amountUSD * rate).toFixed(2);
                     const paidAt = p.paidAt || new Date();
                     await Commission.create({
                         affiliate: newReferrer._id,
@@ -131,14 +140,18 @@ const reassignReferrer = async (req, res) => {
                         stripeSubscriptionId: p.stripeSubscriptionId || null,
                         plan,
                         grossAmountUSD: p.amountUSD,
-                        commissionPercent: rate * 100,
-                        commissionAmountUSD,
+                        commissionPercent: calc.percent,
+                        commissionAmountUSD: calc.amountUSD,
                         periodStart: paidAt,
-                        status: 'available',
+                        status: isBeacons ? 'paid' : 'available',
+                        payoutSource: isBeacons ? 'beacons' : 'internal',
+                        paidAt: isBeacons ? paidAt : undefined,
+                        paidNote: isBeacons ? 'Pagada por Beacons (externo)' : '',
                         createdAt: paidAt, // ← KEY: backdated al mes real del pago
                         updatedAt: paidAt
                     });
                     stats.created += 1;
+                    if (isBeacons) stats.createdAsBeaconsPaid = (stats.createdAsBeaconsPaid || 0) + 1;
                 } catch (err) {
                     if (err.code !== 11000) console.error('reassign create commission:', err.message);
                 }
