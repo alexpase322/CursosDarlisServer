@@ -80,11 +80,32 @@ const publicFormLimiter = rateLimit({
     message: { message: 'Has enviado demasiadas solicitudes. Intenta más tarde.' }
 });
 
+// Checkout: endpoint público que crea sesiones en Stripe. Sin límite, un bot
+// podría generar miles de sesiones basura y consumir la cuota de la API de Stripe.
+// 20/hora es holgado para una compradora real (que hace 1-3 intentos).
+const checkoutLimiter = rateLimit({
+    ...baseOptions,
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    message: { message: 'Demasiados intentos de pago. Espera unos minutos.' }
+});
+
+// Resolución de links de referida: público y hace $inc de clics.
+// Sin límite alguien podría inflar artificialmente las métricas de una afiliada.
+const referralLinkLimiter = rateLimit({
+    ...baseOptions,
+    windowMs: 60 * 60 * 1000,
+    max: 60,                     // 60 aperturas/hora por IP
+    message: { message: 'Demasiadas solicitudes.' }
+});
+
 module.exports = {
     mongoSanitize,
     escapeRegex,
     safeSearchRegex,
     generalLimiter,
     authLimiter,
-    publicFormLimiter
+    publicFormLimiter,
+    checkoutLimiter,
+    referralLinkLimiter
 };

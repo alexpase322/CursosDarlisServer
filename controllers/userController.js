@@ -123,4 +123,60 @@ const deleteUser = async (req, res) => {
     }
 };
 
-module.exports = { updateUserProfile, deleteUser, updateUserRole, getAllUsers };
+// GET /users/:id/public — perfil público de una alumna (visible para la comunidad).
+// PRIVACIDAD: solo se exponen datos sociales. Nunca email, suscripción,
+// comisiones, referidas ni nada financiero.
+const getPublicProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id)
+            .select('username avatar bio role partnerLevel topAchievementTier topAchievementCode achievements currentStreak longestStreak createdAt status')
+            .lean();
+
+        if (!user || user.status !== 'active') {
+            return res.status(404).json({ message: 'Perfil no encontrado' });
+        }
+
+        // Logros desbloqueados, enriquecidos con su definición del catálogo.
+        const { achievements: catalog } = require('../config/achievementsConfig');
+        const unlocked = (user.achievements || [])
+            .map(a => {
+                const def = catalog[a.code];
+                if (!def) return null;
+                return { code: a.code, title: def.title, icon: def.icon, tier: def.tier, unlockedAt: a.unlockedAt };
+            })
+            .filter(Boolean)
+            .sort((a, b) => new Date(b.unlockedAt) - new Date(a.unlockedAt));
+
+        // Actividad en la comunidad
+        const Post = require('../models/Post');
+        const QuizAttempt = require('../models/QuizAttempt');
+        const [postsCount, coursesCompleted] = await Promise.all([
+            Post.countDocuments({ author: user._id }),
+            QuizAttempt.distinct('course', { user: user._id, passed: true })
+        ]);
+
+        res.json({
+            _id: user._id,
+            username: user.username,
+            avatar: user.avatar,
+            bio: user.bio || '',
+            role: user.role,
+            partnerLevel: user.partnerLevel || 1,
+            topAchievementTier: user.topAchievementTier || null,
+            currentStreak: user.currentStreak || 0,
+            longestStreak: user.longestStreak || 0,
+            memberSince: user.createdAt,
+            achievements: unlocked,
+            stats: {
+                achievementsCount: unlocked.length,
+                postsCount,
+                coursesCompleted: coursesCompleted.length
+            }
+        });
+    } catch (err) {
+        console.error('getPublicProfile', err);
+        res.status(500).json({ message: 'Error al cargar el perfil' });
+    }
+};
+
+module.exports = { updateUserProfile, deleteUser, updateUserRole, getAllUsers, getPublicProfile };

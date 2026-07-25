@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
+const { referralLinkLimiter } = require('../middleware/security');
 const {
     getMyAffiliateSummary,
     getMyCommissions,
@@ -21,8 +22,9 @@ const partnerOnly = (req, res, next) => {
     next();
 };
 
-// Público: resolver un código de referido (lo usa la página /r/:code)
-router.get('/r/:code', resolveAndTrackCode);
+// Público: resolver un código de referido (lo usa la página /r/:code).
+// Con límite porque incrementa el contador de clics de la afiliada.
+router.get('/r/:code', referralLinkLimiter, resolveAndTrackCode);
 
 router.get('/me', protect, partnerOnly, getMyAffiliateSummary);
 router.get('/me/link', protect, partnerOnly, getMyReferralLink);

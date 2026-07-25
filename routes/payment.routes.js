@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { getPaymentConfig, createCheckoutSession, stripeWebhook, createBillingPortalSession } = require('../controllers/payment.controller');
 const { protect } = require('../middleware/authMiddleware');
+const { checkoutLimiter } = require('../middleware/security');
 
 // Config pública de precios (Price IDs vigentes, sin depender del build)
 router.get('/config', getPaymentConfig);
 
-// Ruta para el frontend (Crear link de pago)
-router.post('/create-checkout-session', createCheckoutSession);
+// Ruta para el frontend (Crear link de pago) — con límite anti-spam.
+router.post('/create-checkout-session', checkoutLimiter, createCheckoutSession);
 
 // Portal de pagos de Stripe (gestionar suscripción, método de pago, facturas)
 router.post('/portal', protect, createBillingPortalSession);

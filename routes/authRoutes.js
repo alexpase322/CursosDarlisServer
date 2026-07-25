@@ -7,8 +7,10 @@ const { singleImage } = require('../config/upload');
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 
-// Pública: dropdown de afiliadas en SetupAccount
-router.get('/affiliates-public', listPublicAffiliates);
+// Listado de afiliadas. Ya NO es público: el registro dejó de pedir la referidora
+// (ahora viene del link /r/<codigo>). Solo lo usa el modal admin de reasignación,
+// así que se restringe para no exponer nombres y avatares de las usuarias.
+router.get('/affiliates-public', protect, admin, listPublicAffiliates);
 
 // Ruta protegida: Solo accesible con token válido
 router.get('/profile', protect, getProfile);
