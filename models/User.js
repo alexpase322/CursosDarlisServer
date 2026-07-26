@@ -52,6 +52,9 @@ const userSchema = new mongoose.Schema({
     // y los crons de vencimiento lo ignoran.
     lifetimeAccess: { type: Boolean, default: false },
     lifetimeGrantedAt: { type: Date, default: null },
+    // Marca de que ya se avisó a las admins del alta de esta usuaria.
+    // Evita mandar el aviso dos veces si llegan varios eventos de Stripe.
+    adminNotifiedAt: { type: Date, default: null },
 
     // --- Programa de afiliadas ---
     partnerLevel: {

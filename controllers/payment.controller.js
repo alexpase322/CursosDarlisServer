@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Payment = require('../models/Payment');
+const WebhookEvent = require('../models/WebhookEvent');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const {
     recordCommissionFromInvoice,
@@ -148,40 +149,73 @@ const stripeWebhook = async (req, res) => {
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    try {
-        switch (event.type) {
-            case 'checkout.session.completed':
-                await handleCheckoutSuccess(event.data.object);
-                break;
+    // Eventos que realmente procesamos. El resto se descarta de inmediato
+    // (el endpoint en Stripe tiene muchos eventos habilitados y no queremos
+    // gastar recursos ni arriesgar timeouts por eventos irrelevantes).
+    const HANDLED = [
+        'checkout.session.completed',
+        'invoice.payment_succeeded',
+        'invoice.payment_failed',
+        'customer.subscription.updated',
+        'customer.subscription.deleted',
+        'charge.refunded'
+    ];
 
-            case 'invoice.payment_succeeded':
-                await handleInvoicePaymentSucceeded(event.data.object);
-                break;
-
-            case 'invoice.payment_failed':
-                await handleInvoicePaymentFailed(event.data.object);
-                break;
-
-            case 'customer.subscription.updated':
-                await handleSubscriptionUpdated(event.data.object);
-                break;
-
-            case 'customer.subscription.deleted':
-                await handleSubscriptionDeleted(event.data.object);
-                break;
-
-            case 'charge.refunded':
-                await handleChargeRefunded(event.data.object);
-                break;
-
-            default:
-                console.log(`Evento no manejado: ${event.type}`);
-        }
-    } catch (err) {
-        console.error('[stripeWebhook] error procesando evento', event.type, err);
+    if (!HANDLED.includes(event.type)) {
+        return res.json({ received: true, ignored: true });
     }
 
-    res.send();
+    // IDEMPOTENCIA: si este evento ya se procesó, no repetimos.
+    // Evita emails y notificaciones duplicadas cuando Stripe reintenta.
+    try {
+        await WebhookEvent.create({ eventId: event.id, type: event.type });
+    } catch (err) {
+        if (err.code === 11000) {
+            console.log(`[stripeWebhook] evento ${event.id} ya procesado, se ignora (reintento de Stripe)`);
+            return res.json({ received: true, duplicate: true });
+        }
+        // Si falla por otra razón, seguimos: es preferible procesar a perder el evento.
+        console.error('[stripeWebhook] dedupe:', err.message);
+    }
+
+    // Respondemos 200 YA. Stripe corta a los ~20s y reintenta si no contesta;
+    // como el procesamiento hace red (Stripe, Resend, push) puede tardar más.
+    res.json({ received: true });
+
+    // Procesamiento en segundo plano.
+    setImmediate(async () => {
+        try {
+            switch (event.type) {
+                case 'checkout.session.completed':
+                    await handleCheckoutSuccess(event.data.object);
+                    break;
+
+                case 'invoice.payment_succeeded':
+                    await handleInvoicePaymentSucceeded(event.data.object);
+                    break;
+
+                case 'invoice.payment_failed':
+                    await handleInvoicePaymentFailed(event.data.object);
+                    break;
+
+                case 'customer.subscription.updated':
+                    await handleSubscriptionUpdated(event.data.object);
+                    break;
+
+                case 'customer.subscription.deleted':
+                    await handleSubscriptionDeleted(event.data.object);
+                    break;
+
+                case 'charge.refunded':
+                    await handleChargeRefunded(event.data.object);
+                    break;
+            }
+        } catch (err) {
+            console.error('[stripeWebhook] error procesando', event.type, err);
+            // Liberamos el candado para que un reintento de Stripe pueda recuperarlo.
+            await WebhookEvent.deleteOne({ eventId: event.id }).catch(() => {});
+        }
+    });
 };
 
 // --- Helpers ---
@@ -502,6 +536,20 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
 };
 
 async function notifyAdminsOfNewSubscription(user, invoice) {
+    // Guarda de idempotencia: si a esta usuaria ya se le avisó a las admins,
+    // no repetimos. Stripe puede mandar varios eventos por la misma compra
+    // (checkout.session.completed + invoice.payment_succeeded).
+    if (user?._id) {
+        const claimed = await User.updateOne(
+            { _id: user._id, adminNotifiedAt: null },
+            { $set: { adminNotifiedAt: new Date() } }
+        );
+        if (!claimed.modifiedCount) {
+            console.log(`[notifyAdmins] ya se avisó del alta de ${user.email}; se omite`);
+            return;
+        }
+    }
+
     const userName = user?.username || invoice.customer_email || 'Nueva alumna';
     const userEmail = user?.email || invoice.customer_email || '';
     const amount = invoice.amount_paid != null ? (invoice.amount_paid / 100) : 0;
