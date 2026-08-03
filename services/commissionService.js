@@ -1,6 +1,6 @@
 const Commission = require('../models/Commission');
 const User = require('../models/User');
-const { rates, prices, inferPlan, calculateCommission } = require('../config/affiliateConfig');
+const { rates, prices, calculateCommission, resolveArquitectaPlan } = require('../config/affiliateConfig');
 const { evaluateAutoPromotion } = require('./levelService');
 const { sendToUser } = require('./pushService');
 const { unlockAchievement, evaluateMilestones } = require('./engagementService');
@@ -180,9 +180,11 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
     const grossAmountUSD = invoice.amount_paid != null
         ? invoice.amount_paid / 100
         : null;
-    const plan = inferPlan({ priceId, lineItem, amountUSD: grossAmountUSD });
+    // Defensa en profundidad: nunca pagamos comisión por un producto ajeno,
+    // aunque el evento llegara por otra vía.
+    const plan = resolveArquitectaPlan({ priceId, lineItem });
     if (!plan) {
-        console.warn(`[commissions] no pude inferir plan para invoice ${invoice.id} (priceId=${priceId}, amount=${grossAmountUSD}); skip.`);
+        console.warn(`[commissions] invoice ${invoice.id} no es de Arquitecta (priceId=${priceId}); skip.`);
         return null;
     }
 
@@ -244,8 +246,13 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
 // Comisión de una venta de PAGO ÚNICO (ej. plan lifetime $247 → $197 para la afiliada).
 // Los pagos únicos de Stripe no generan invoice, así que usamos el id del
 // checkout session / payment_intent como clave de idempotencia.
+// `payoutSource: 'beacons'` marca la comisión como YA PAGADA: en las ventas de
+// Beacons es Beacons quien le paga a la afiliada, nosotros solo registramos la
+// venta para tener trazabilidad. Sin esto la comisión saldría "por pagar" y se
+// pagaría dos veces.
 async function recordCommissionForOneTimeSale({
-    referredUser, affiliateId, plan, grossAmountUSD, externalId, paidAt
+    referredUser, affiliateId, plan, grossAmountUSD, externalId, paidAt,
+    payoutSource = 'internal'
 }) {
     if (!referredUser || !affiliateId || !externalId) return null;
 
@@ -263,6 +270,8 @@ async function recordCommissionForOneTimeSale({
         return null;
     }
 
+    const yaPagadaPorBeacons = payoutSource === 'beacons';
+
     let commission;
     try {
         commission = await Commission.create({
@@ -276,7 +285,8 @@ async function recordCommissionForOneTimeSale({
             commissionAmountUSD: calc.amountUSD,
             periodStart: paidAt || new Date(),
             periodEnd: null,
-            status: 'available'
+            status: yaPagadaPorBeacons ? 'paid' : 'available',
+            payoutSource
         });
     } catch (err) {
         if (err.code === 11000) return await Commission.findOne({ stripeInvoiceId: externalId });
@@ -285,7 +295,11 @@ async function recordCommissionForOneTimeSale({
 
     affiliate.referralStats = affiliate.referralStats || {};
     affiliate.referralStats.totalEarnedUSD = (affiliate.referralStats.totalEarnedUSD || 0) + calc.amountUSD;
-    affiliate.referralStats.pendingUSD = (affiliate.referralStats.pendingUSD || 0) + calc.amountUSD;
+    if (yaPagadaPorBeacons) {
+        affiliate.referralStats.paidUSD = (affiliate.referralStats.paidUSD || 0) + calc.amountUSD;
+    } else {
+        affiliate.referralStats.pendingUSD = (affiliate.referralStats.pendingUSD || 0) + calc.amountUSD;
+    }
     await affiliate.save();
 
     await evaluateAutoPromotion(affiliate);

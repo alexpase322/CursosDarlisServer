@@ -10,7 +10,8 @@ const {
     onReferredSubscriptionCanceled,
     voidCommissionByInvoiceId
 } = require('../services/commissionService');
-const { inferPlan, planFromStripePriceId, isOneTimePlan, legacyPlans, prices } = require('../config/affiliateConfig');
+const { inferPlan, legacyPlans, prices, resolveArquitectaPlan } = require('../config/affiliateConfig');
+const { checkArquitecta } = require('../services/productFilter');
 const { resolveReferralCode, ensureReferralCode, isEligibleAffiliate } = require('../services/referralService');
 const { sendInvitation } = require('../services/invitationService');
 const { sendToAdmins } = require('../services/pushService');
@@ -76,11 +77,18 @@ const createCheckoutSession = async (req, res) => {
         }
 
         const oneTime = stripePrice.type === 'one_time' || !stripePrice.recurring;
-        const amountUSD = stripePrice.unit_amount != null ? stripePrice.unit_amount / 100 : null;
 
-        // Deducir el nombre del plan: primero por el map de .env, si no por el precio.
-        const planFromPrice = planFromStripePriceId(priceId)
-            || inferPlan({ priceId, lineItem: { price: stripePrice }, amountUSD });
+        // El plan sale del producto de Stripe, no del monto. Si el price no
+        // pertenece a Arquitecta, no se puede comprar desde aquí.
+        const planFromPrice = resolveArquitectaPlan({
+            priceId,
+            product: stripePrice.product,
+            lineItem: { price: stripePrice }
+        });
+        if (!planFromPrice) {
+            console.warn(`[checkout] price ajeno rechazado: ${priceId} (product=${stripePrice.product})`);
+            return res.status(400).json({ message: 'Este plan no está disponible.' });
+        }
 
         // Bloquear planes descontinuados (trimestral/anual): ya no se venden.
         // Las alumnas que ya los tienen siguen renovando sin problema.
@@ -240,8 +248,38 @@ const handleOneTimePurchase = async (session) => {
         return;
     }
 
+    // 1.b) Verificar que el producto comprado sea de Arquitecta.
+    // La cuenta de Stripe recibe checkouts de otros negocios; sin esta comprobación
+    // cualquier pago único de $X daría acceso vitalicio por error.
+    let verifiedPlan = null;
+    let esBeacons = false;
+    try {
+        const items = await stripe.checkout.sessions.listLineItems(session.id, {
+            limit: 1,
+            expand: ['data.price.product']
+        });
+        const li = items.data[0];
+        const g = await checkArquitecta({
+            priceId: li?.price?.id,
+            lineItem: li,
+            contexto: `pago único ${session.id}`
+        });
+        if (!g.ok) return;
+        verifiedPlan = g.plan;
+        esBeacons = g.esBeacons;
+    } catch (err) {
+        // Si Stripe no responde, no dejamos fuera a una compradora legítima:
+        // nuestro propio checkout siempre escribe metadata.plan. Sin metadata
+        // y sin poder verificar, preferimos no dar acceso.
+        console.error('[one-time] no se pudo verificar el producto:', err.message);
+        if (!meta.plan) {
+            console.warn(`[one-time] ${session.id} sin metadata propia y sin verificar; se omite`);
+            return;
+        }
+    }
+
     const amountUSD = session.amount_total != null ? session.amount_total / 100 : prices.lifetime;
-    const plan = meta.plan || 'lifetime';
+    const plan = verifiedPlan || meta.plan || 'lifetime';
     const paidAt = new Date();
 
     // 2) Buscar o crear la usuaria (auto-invitación crea la cuenta + manda el correo)
@@ -308,7 +346,9 @@ const handleOneTimePurchase = async (session) => {
                 plan,
                 amountUSD,
                 status: 'paid',
-                paidAt
+                paidAt,
+                method: esBeacons ? 'beacons' : 'stripe',
+                note: esBeacons ? 'Venta de Beacons cobrada vía Stripe' : undefined
             } },
             { upsert: true }
         );
@@ -325,9 +365,17 @@ const handleOneTimePurchase = async (session) => {
                 plan,
                 grossAmountUSD: amountUSD,
                 externalId,
-                paidAt
+                paidAt,
+                // En Beacons la comisión ya la pagó Beacons: se registra como
+                // pagada para trazabilidad, no vuelve a la cola de pagos.
+                payoutSource: esBeacons ? 'beacons' : 'internal'
             });
-            if (c) console.log(`[one-time] comisión $${c.commissionAmountUSD} → afiliada ${user.referredBy}`);
+            if (c) {
+                console.log(
+                    `[one-time] comisión $${c.commissionAmountUSD} → afiliada ${user.referredBy}` +
+                    (esBeacons ? ' (ya pagada por Beacons)' : '')
+                );
+            }
         } catch (err) {
             console.error('[one-time] comisión:', err.message);
         }
@@ -359,8 +407,14 @@ const handleCheckoutSuccess = async (session) => {
     let subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const subItem = subscription.items.data[0];
     const priceId = subItem?.price?.id;
-    const subAmountUSD = subItem?.price?.unit_amount != null ? subItem.price.unit_amount / 100 : null;
-    const plan = inferPlan({ priceId, lineItem: subItem, amountUSD: subAmountUSD });
+
+    const guard = await checkArquitecta({
+        priceId,
+        lineItem: subItem,
+        contexto: `checkout ${session.id}`
+    });
+    if (!guard.ok) return;   // suscripción de otro producto de la cuenta
+    const plan = guard.plan;
 
     // ─── Aplicar promo trimestral si está activa ───
     // Mecánica: el cliente paga el cobro normal en el checkout. Después extendemos
@@ -451,6 +505,15 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     const subscriptionId = getSubscriptionIdFromInvoice(invoice);
     const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+    // ¿Este cobro es de Arquitecta o de otro negocio de la misma cuenta Stripe?
+    const firstLine = invoice.lines?.data?.[0];
+    const guard = await checkArquitecta({
+        priceId: firstLine?.price?.id,
+        lineItem: firstLine,
+        contexto: `invoice ${invoice.id}`
+    });
+    if (!guard.ok) return;   // no es nuestro: ni acceso, ni comisión, ni aviso
+
     // Resolver email del invoice (lo necesitamos sí o sí para auto-invitar).
     let email = (invoice.customer_email || '').toLowerCase().trim();
     if (!email && customerId) {
@@ -488,9 +551,7 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
         const periodEnd = lineItem && lineItem.period && lineItem.period.end
             ? new Date(lineItem.period.end * 1000) : null;
-        const priceId = lineItem && lineItem.price && lineItem.price.id;
-        const amountUSD = invoice.amount_paid != null ? invoice.amount_paid / 100 : 0;
-        const plan = inferPlan({ priceId, lineItem, amountUSD });
+        const plan = guard.plan;   // ya resuelto por producto, no adivinado
 
         user.subscription = {
             ...(user.subscription || {}),
@@ -694,7 +755,14 @@ const handleInvoicePaymentFailed = async (invoice) => {
         const priceId = lineItem && lineItem.price && lineItem.price.id;
         const amountUSD = invoice.amount_due != null ? invoice.amount_due / 100
             : (invoice.amount_paid != null ? invoice.amount_paid / 100 : 0);
-        const plan = inferPlan({ priceId, lineItem, amountUSD });
+
+        // Solo registramos fallos de Arquitecta; los de otros productos de la
+        // cuenta ensuciarían la tabla de pagos y el panel de suscripciones.
+        const guard = await checkArquitecta({
+            priceId, lineItem, contexto: `invoice fallida ${invoice.id}`
+        });
+        if (!guard.ok) return;
+        const plan = guard.plan;
 
         const failedAt = new Date();
         const nextAttemptAt = invoice.next_payment_attempt
@@ -762,6 +830,17 @@ const handleInvoicePaymentFailed = async (invoice) => {
 };
 
 const handleSubscriptionUpdated = async (subscription) => {
+    // Una misma clienta puede tener suscripciones de varios negocios bajo el mismo
+    // customerId. Sin este filtro, la sub de otro producto sobrescribiría la de
+    // Arquitecta al buscar por customerId.
+    const subItem0 = subscription.items?.data?.[0];
+    const guard = await checkArquitecta({
+        priceId: subItem0?.price?.id,
+        lineItem: subItem0,
+        contexto: `sub actualizada ${subscription.id}`
+    });
+    if (!guard.ok) return;
+
     let user = await User.findOne({ 'subscription.id': subscription.id });
     if (!user && subscription.customer) {
         user = await User.findOne({ 'subscription.customerId': subscription.customer });
@@ -770,10 +849,7 @@ const handleSubscriptionUpdated = async (subscription) => {
         console.warn(`[customer.subscription.updated] usuario no encontrado (sub=${subscription.id})`);
         return;
     }
-    const subItem = subscription.items && subscription.items.data && subscription.items.data[0];
-    const priceId = subItem?.price?.id;
-    const subAmountUSD = subItem?.price?.unit_amount != null ? subItem.price.unit_amount / 100 : null;
-    const plan = inferPlan({ priceId, lineItem: subItem, amountUSD: subAmountUSD });
+    const plan = guard.plan;
 
     user.subscription = {
         ...(user.subscription || {}),

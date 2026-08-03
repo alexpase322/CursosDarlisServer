@@ -49,6 +49,110 @@ const stripePriceMap = {
 // Registrar los lifetime conocidos en el mapa.
 for (const id of KNOWN_LIFETIME_PRICE_IDS) stripePriceMap[id] = 'lifetime';
 
+// ─────────────────────────────────────────────────────────────────────────
+// PRODUCTOS DE ARQUITECTA (allowlist).
+// La cuenta de Stripe también recibe pagos de OTROS negocios cuyos montos se
+// parecen ($199, $250, $170…). Adivinar el plan por el monto daba accesos por
+// error, así que la fuente de verdad es el PRODUCTO de Stripe.
+// Ventaja: un producto puede tener varios precios (hoy $197, mañana $247) y
+// todos quedan cubiertos sin tocar código.
+// ─────────────────────────────────────────────────────────────────────────
+const arquitectaProducts = {
+    'prod_UwK5fQhEuzH6L5': 'lifetime',   // Arquitecta de tu propio éxito (único pago) — $197 promo / $247
+    'prod_Tl5UNZQLJP41ce': 'monthly',    // Membresía mensual — $50
+    'prod_UBohkEJ6PB1czo': 'monthly',    // darlisfrancofv - subscription — $50
+    // Legacy: ya no se venden, pero hay alumnas activas que deben seguir renovando.
+    'prod_Tl5VnpAOIXXLbd': 'quarterly',  // Membresía trimestral — $120
+    'prod_UOfKffaHV4Po7h': 'yearly'      // Membresía anual — $397
+};
+
+// Permite añadir productos desde el entorno sin tocar código:
+// STRIPE_EXTRA_PRODUCTS="prod_ABC:monthly,prod_XYZ:lifetime"
+if (process.env.STRIPE_EXTRA_PRODUCTS) {
+    for (const par of process.env.STRIPE_EXTRA_PRODUCTS.split(',')) {
+        const [pid, plan] = par.split(':').map(s => (s || '').trim());
+        if (pid && plan) arquitectaProducts[pid] = plan;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// VENTAS DE BEACONS.
+// Beacons cobra a través de esta cuenta de Stripe y crea un producto NUEVO por
+// cada venta, con este nombre:
+//   "Invoice paid by <nombre> on Beacons for <PRODUCTO> - <uuid>"
+// El ID cambia siempre, así que la lista de productos no sirve para estas
+// ventas: hay que reconocer el nombre. En Beacons también se venden otros
+// cursos (p. ej. "Mini curso AMAZON AL DESCUBIERTO"), que deben quedar fuera.
+// ─────────────────────────────────────────────────────────────────────────
+const arquitectaNamePattern = /arquitecta\s+de\s+tu\s+propio\s+[éeÉE]xito/i;
+
+// Beacons solo vende el programa de pago único ($197 promo → $247).
+function planFromProductName(name) {
+    if (!name || typeof name !== 'string') return null;
+    return arquitectaNamePattern.test(name) ? 'lifetime' : null;
+}
+
+// En las ventas de Beacons la comisión la paga Beacons directamente a la
+// afiliada; nosotros solo la registramos para trazabilidad.
+const beaconsNamePattern = /\bon\s+Beacons\s+for\b/i;
+const isBeaconsSale = (name) => typeof name === 'string' && beaconsNamePattern.test(name);
+
+const idOf = (v) => (typeof v === 'string' ? v : v?.id) || null;
+
+// Stripe expone el precio con formas distintas según el objeto y la versión de API:
+//   · items de suscripción y line items de checkout → lineItem.price.{id,product}
+//   · líneas de invoice (API nueva)                 → lineItem.pricing.price_details.{price,product}
+//   · objetos antiguos con plan                     → lineItem.plan.{id,product}
+// Leer solo `.price` devolvía undefined en las invoices, que era justo lo que
+// hacía caer la detección al fallback por monto.
+function extractPriceRef(lineItem) {
+    if (!lineItem) return { priceId: null, productId: null };
+    const details = lineItem.pricing?.price_details;
+    return {
+        priceId:
+            idOf(lineItem.price) ||
+            (details?.price ?? null) ||
+            idOf(lineItem.plan),
+        productId:
+            idOf(lineItem.price?.product) ||
+            (details?.product ?? null) ||
+            idOf(lineItem.plan?.product)
+    };
+}
+
+/**
+ * Determina el plan de Arquitecta de forma ESTRICTA.
+ * Devuelve el plan, o null si el pago NO pertenece a Arquitecta (otro negocio).
+ * A diferencia de inferPlan(), nunca adivina por monto.
+ */
+function resolveArquitectaPlan({ priceId, product, lineItem, productName } = {}) {
+    const ref = extractPriceRef(lineItem);
+    const pid = priceId || ref.priceId;
+
+    // 1) Price exacto conocido (.env o lista de lifetime)
+    if (pid && stripePriceMap[pid]) return stripePriceMap[pid];
+
+    // 2) Producto en la allowlist — cubre precios nuevos del mismo producto
+    const prod = idOf(product) || ref.productId;
+    if (prod && arquitectaProducts[prod]) return arquitectaProducts[prod];
+
+    // 3) Producto efímero de Beacons: se reconoce por el nombre
+    const nombre = productName
+        || (typeof product === 'object' ? product?.name : null)
+        || (typeof lineItem?.price?.product === 'object' ? lineItem.price.product?.name : null)
+        || lineItem?.description;
+    const porNombre = planFromProductName(nombre);
+    if (porNombre) return porNombre;
+
+    // 4) No es de Arquitecta
+    return null;
+}
+
+const isArquitectaProduct = (product) => {
+    const pid = idOf(product);
+    return !!(pid && arquitectaProducts[pid]);
+};
+
 const promotion = {
     n2ToN3: { activeReferralsRequired: 40 }
 };
@@ -134,6 +238,13 @@ module.exports = {
     oneTimePlans,
     isOneTimePlan,
     stripePriceMap,
+    arquitectaProducts,
+    resolveArquitectaPlan,
+    isArquitectaProduct,
+    extractPriceRef,
+    planFromProductName,
+    arquitectaNamePattern,
+    isBeaconsSale,
     promotion,
     levels,
     planFromStripePriceId,

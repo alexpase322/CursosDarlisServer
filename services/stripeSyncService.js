@@ -13,7 +13,7 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Payment = require('../models/Payment');
 const User = require('../models/User');
-const { inferPlan } = require('../config/affiliateConfig');
+const { checkArquitecta } = require('./productFilter');
 
 const ACTIVE_SUB_STATUSES = ['active', 'trialing', 'past_due'];
 
@@ -152,7 +152,15 @@ async function syncStripePayments(opts = {}) {
         const lineItem = invoice.lines && invoice.lines.data && invoice.lines.data[0];
         const priceId = lineItem && lineItem.price && lineItem.price.id;
         const amountUSD = invoice.amount_paid != null ? invoice.amount_paid / 100 : 0;
-        const plan = inferPlan({ priceId, lineItem, amountUSD });
+
+        // La cuenta de Stripe cobra varios negocios. Solo importamos Arquitecta.
+        const { ok, plan } = await checkArquitecta({
+            priceId, lineItem, contexto: `invoice ${invoice.id}`, silencioso: true
+        });
+        if (!ok) {
+            counters.skippedOtherProduct = (counters.skippedOtherProduct || 0) + 1;
+            continue;
+        }
         if (planFilter && plan !== planFilter) {
             counters.skipped += 1;
             continue;
@@ -296,10 +304,15 @@ async function syncStripePayments(opts = {}) {
 
                     const subItem = sub.items && sub.items.data && sub.items.data[0];
                     const subPriceId = subItem && subItem.price && subItem.price.id;
-                    const subAmountUSD = subItem && subItem.price && subItem.price.unit_amount != null
-                        ? subItem.price.unit_amount / 100
-                        : null;
-                    const plan = inferPlan({ priceId: subPriceId, lineItem: subItem, amountUSD: subAmountUSD });
+                    // Solo suscripciones de Arquitecta (la cuenta tiene otros negocios).
+                    const { ok, plan } = await checkArquitecta({
+                        priceId: subPriceId, lineItem: subItem,
+                        contexto: `sub ${sub.id}`, silencioso: true
+                    });
+                    if (!ok) {
+                        counters.skippedOtherProduct = (counters.skippedOtherProduct || 0) + 1;
+                        continue;
+                    }
                     if (planFilter && plan !== planFilter) continue;
 
                     // Sincronizar User.subscription siempre

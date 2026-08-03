@@ -237,7 +237,8 @@ const registerManualPayment = async (req, res) => {
 //   4) Refresca User.subscription con la sub activa más reciente.
 // NO toca pagos manuales (`manual_*`), NO borra Payments existentes.
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { inferPlan } = require('../config/affiliateConfig');
+const { resolveArquitectaPlan } = require('../config/affiliateConfig');
+const { checkArquitecta } = require('../services/productFilter');
 
 const PAID_AT_FLOOR = new Date('2026-03-01T00:00:00.000Z');
 const PAID_AT_FLOOR_UNIX = Math.floor(PAID_AT_FLOOR.getTime() / 1000);
@@ -301,6 +302,15 @@ async function reconcileOneUser(user, stats, log) {
             const priceId = lineItem?.price?.id;
             const subscriptionId = getSubscriptionIdFromInvoice(invoice);
 
+            // La cuenta de Stripe cobra otros negocios: solo reconciliamos Arquitecta.
+            const { ok: esArquitecta, plan: arqPlan } = await checkArquitecta({
+                priceId, lineItem, contexto: `invoice ${invoice.id}`, silencioso: true
+            });
+            if (!esArquitecta) {
+                stats.skippedOtherProduct = (stats.skippedOtherProduct || 0) + 1;
+                continue;
+            }
+
             const paidAt = invoice.status_transitions?.paid_at
                 ? new Date(invoice.status_transitions.paid_at * 1000)
                 : new Date(invoice.created * 1000);
@@ -329,7 +339,7 @@ async function reconcileOneUser(user, stats, log) {
                 continue; // ignorar voids
             }
 
-            const plan = inferPlan({ priceId, lineItem, amountUSD });
+            const plan = arqPlan;
 
             const set = {
                 email,
@@ -388,14 +398,18 @@ async function reconcileOneUser(user, stats, log) {
         const subList = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 10 });
         const subs = (subList.data || [])
             .filter(s => ACTIVE_SUB_STATUSES.includes(s.status) || s.status === 'canceled')
+            // Una clienta puede tener subs de otros negocios con el mismo customer:
+            // solo consideramos las de Arquitecta.
+            .filter(s => {
+                const it = s.items?.data?.[0];
+                return !!resolveArquitectaPlan({ priceId: it?.price?.id, lineItem: it });
+            })
             .sort((a, b) => (b.current_period_end || 0) - (a.current_period_end || 0));
         const best = subs.find(s => ACTIVE_SUB_STATUSES.includes(s.status)) || subs[0];
 
         if (best) {
             const subItem = best.items?.data?.[0];
-            const subPriceId = subItem?.price?.id;
-            const subAmountUSD = subItem?.price?.unit_amount != null ? subItem.price.unit_amount / 100 : null;
-            const plan = inferPlan({ priceId: subPriceId, lineItem: subItem, amountUSD: subAmountUSD });
+            const plan = resolveArquitectaPlan({ priceId: subItem?.price?.id, lineItem: subItem });
 
             const newSub = {
                 id: best.id,
