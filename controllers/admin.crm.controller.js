@@ -6,6 +6,7 @@ const { backfillCommissionsForUser } = require('../services/commissionService');
 const { safeSearchRegex } = require('../middleware/security');
 const { ensureReferralCode, backfillReferralCodes, eligibleAffiliateFilter } = require('../services/referralService');
 const { voidOrphanCommissions } = require('../services/userDeletionService');
+const { byCode, rankForAmount } = require('../config/rankConfig');
 
 // GET /admin/affiliates  — listado paginado con filtros
 const listAffiliates = async (req, res) => {
@@ -29,7 +30,7 @@ const listAffiliates = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [users, total] = await Promise.all([
             User.find(filter)
-                .select('username email avatar partnerLevel partnerLevelSetManually partnerActivatedAt referralStats createdAt')
+                .select('username email avatar partnerLevel partnerLevelSetManually partnerActivatedAt referralStats createdAt rankCode rankLevel rankReachedAt')
                 .sort(sort)
                 .skip(skip)
                 .limit(parseInt(limit))
@@ -66,14 +67,26 @@ const listAffiliates = async (req, res) => {
         const items = users.map(u => {
             const k = String(u._id);
             const c = commMap.get(k) || { available: 0, pending: 0, paid: 0, voided: 0 };
+            const totalEarnedUSD = +(c.available + c.pending + c.paid).toFixed(2);
+            // Rango guardado + el que le tocaría por su total actual: si difieren,
+            // el admin ve que hace falta pulsar "Rangos de Arquitecta".
+            const guardado = byCode[u.rankCode] || null;
+            const segunTotal = rankForAmount(totalEarnedUSD);
             return {
                 ...u,
+                rank: guardado
+                    ? { code: guardado.code, level: guardado.level, title: guardado.title,
+                        gradient: guardado.gradient, accent: guardado.accent, reachedAt: u.rankReachedAt || null }
+                    : null,
+                rankPending: (guardado?.level ?? -1) < segunTotal.level
+                    ? { code: segunTotal.code, level: segunTotal.level, title: segunTotal.title }
+                    : null,
                 referralStats: {
                     activeReferred: activeMap.get(k) || 0,
                     totalReferred: totalMap.get(k) || 0,
                     pendingUSD: +(c.available + c.pending).toFixed(2),
                     paidUSD: +c.paid.toFixed(2),
-                    totalEarnedUSD: +(c.available + c.pending + c.paid).toFixed(2)
+                    totalEarnedUSD
                 }
             };
         });

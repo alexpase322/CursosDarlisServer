@@ -10,6 +10,7 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const Commission = require('../models/Commission');
 const { calculateCommission } = require('../config/affiliateConfig');
+const { refreshRank } = require('../services/rankService');
 const { evaluateMilestones } = require('../services/engagementService');
 const { isEligibleAffiliate } = require('../services/referralService');
 
@@ -161,6 +162,12 @@ const reassignReferrer = async (req, res) => {
         // Paso 4: recomputar referralStats de afiliada vieja y nueva
         if (oldReferrerId) await recomputeAffiliateStats(oldReferrerId);
         if (newReferrer)    await recomputeAffiliateStats(newReferrer._id);
+
+        // Paso 5: la reasignación mueve comisiones de una afiliada a otra, así que
+        // la nueva puede haber cruzado un umbral de rango.
+        if (newReferrer) {
+            await refreshRank(newReferrer._id).catch(e => console.error('[rango]', e.message));
+        }
 
         res.json({
             ok: true,

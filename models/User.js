@@ -89,6 +89,22 @@ const userSchema = new mongoose.Schema({
         pendingUSD: { type: Number, default: 0 },
         paidUSD: { type: Number, default: 0 }
     },
+    // --- Rango de Arquitecta (por USD generado en comisiones) ---
+    // Ver server/config/rankConfig.js. Solo sube: si una comisión se anula y el
+    // total baja, el rango alcanzado no se retira.
+    rankCode: { type: String, default: null },
+    rankLevel: { type: Number, default: 0 },
+    rankReachedAt: { type: Date, default: null },
+    // Hasta qué nivel se le mostró ya la pantalla de celebración. Va aparte de
+    // rankLevel para que, si asciende sin estar conectada, la vea igual al entrar.
+    rankCelebratedLevel: { type: Number, default: 0 },
+    rankHistory: [{
+        code: { type: String },
+        level: { type: Number },
+        reachedAt: { type: Date, default: Date.now },
+        totalUSD: { type: Number }
+    }],
+
     partnerActivatedAt: { type: Date },
     // Entrenamiento comercial requerido para promover de N2 a N3 (sec. 5.2 del doc).
     trainingCompleted: { type: Boolean, default: false },

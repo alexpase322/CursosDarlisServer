@@ -129,7 +129,7 @@ const deleteUser = async (req, res) => {
 const getPublicProfile = async (req, res) => {
     try {
         const user = await User.findById(req.params.id)
-            .select('username avatar bio role partnerLevel topAchievementTier topAchievementCode achievements currentStreak longestStreak createdAt status')
+            .select('username avatar bio role partnerLevel topAchievementTier topAchievementCode achievements currentStreak longestStreak createdAt status rankCode rankLevel rankReachedAt')
             .lean();
 
         if (!user || user.status !== 'active') {
@@ -163,6 +163,15 @@ const getPublicProfile = async (req, res) => {
             role: user.role,
             partnerLevel: user.partnerLevel || 1,
             topAchievementTier: user.topAchievementTier || null,
+            // Rango de Arquitecta. Se manda la definición completa (título,
+            // colores, lema) para que el cliente lo pinte sin otra petición.
+            // NO se expone el USD facturado: es información privada.
+            rank: (() => {
+                const { byCode } = require('../config/rankConfig');
+                const r = byCode[user.rankCode];
+                if (!r || r.level === 0) return null;
+                return { ...r, reachedAt: user.rankReachedAt || null };
+            })(),
             currentStreak: user.currentStreak || 0,
             longestStreak: user.longestStreak || 0,
             memberSince: user.createdAt,

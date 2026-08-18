@@ -1,6 +1,7 @@
 const Commission = require('../models/Commission');
 const User = require('../models/User');
 const { rates, prices, calculateCommission, resolveArquitectaPlan } = require('../config/affiliateConfig');
+const { refreshRank } = require('./rankService');
 const { evaluateAutoPromotion } = require('./levelService');
 const { sendToUser } = require('./pushService');
 const { unlockAchievement, evaluateMilestones } = require('./engagementService');
@@ -140,6 +141,9 @@ async function recordCommissionFromManualPayment(payment) {
     await affiliate.save();
 
     await evaluateAutoPromotion(affiliate);
+    // El rango de Arquitecta depende del total facturado: al sumar una
+    // comisión puede haber ascenso. No bloquea el flujo de la venta.
+    refreshRank(affiliate._id).catch(e => console.error('[rango]', e.message));
 
     // Notificar a la afiliada + milestones.
     notifyAffiliateOfCommission(affiliate, referredUser, commissionAmountUSD, plan).catch(e =>
@@ -231,6 +235,9 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
     await affiliate.save();
 
     await evaluateAutoPromotion(affiliate);
+    // El rango de Arquitecta depende del total facturado: al sumar una
+    // comisión puede haber ascenso. No bloquea el flujo de la venta.
+    refreshRank(affiliate._id).catch(e => console.error('[rango]', e.message));
 
     // Notificación a la afiliada (push + email).
     notifyAffiliateOfCommission(affiliate, referredUser, commissionAmountUSD, plan).catch(e =>
@@ -303,6 +310,9 @@ async function recordCommissionForOneTimeSale({
     await affiliate.save();
 
     await evaluateAutoPromotion(affiliate);
+    // El rango de Arquitecta depende del total facturado: al sumar una
+    // comisión puede haber ascenso. No bloquea el flujo de la venta.
+    refreshRank(affiliate._id).catch(e => console.error('[rango]', e.message));
 
     notifyAffiliateOfCommission(affiliate, referredUser, calc.amountUSD, plan).catch(e =>
         console.error('[notifyAffiliateOfCommission one-time]', e.message)
@@ -365,6 +375,9 @@ async function onReferredSubscriptionActivated(referredUser) {
     await affiliate.save();
 
     await evaluateAutoPromotion(affiliate);
+    // El rango de Arquitecta depende del total facturado: al sumar una
+    // comisión puede haber ascenso. No bloquea el flujo de la venta.
+    refreshRank(affiliate._id).catch(e => console.error('[rango]', e.message));
 
     // Recalcula todos los milestones de referidas.
     evaluateMilestones(affiliate._id).catch(() => {});

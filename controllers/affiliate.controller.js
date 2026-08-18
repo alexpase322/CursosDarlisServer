@@ -3,6 +3,8 @@ const Commission = require('../models/Commission');
 const PartnerApplication = require('../models/PartnerApplication');
 const Payment = require('../models/Payment');
 const { rates, prices, flatCommissions } = require('../config/affiliateConfig');
+const { ranks } = require('../config/rankConfig');
+const { refreshRank } = require('../services/rankService');
 const {
     ensureReferralCode,
     regenerateReferralCode,
@@ -103,6 +105,64 @@ const getMyAffiliateSummary = async (req, res) => {
     } catch (err) {
         console.error('getMyAffiliateSummary', err);
         res.status(500).json({ message: 'Error al obtener resumen' });
+    }
+};
+
+// GET /affiliate/me/rank
+// Rango actual de la Arquitecta + progreso hacia el siguiente + escalera completa
+// (la escalera se manda entera para poder pintar el camino y lo que viene).
+const getMyRank = async (req, res) => {
+    try {
+        const estado = await refreshRank(req.user._id, { notify: true });
+        if (!estado) return res.status(404).json({ message: 'No encontrado' });
+
+        // Celebración pendiente: subió de rango y todavía no se le mostró.
+        // No depende de que estuviera conectada cuando ocurrió el ascenso.
+        const yo = await User.findById(req.user._id).select('rankLevel rankCelebratedLevel');
+        const porCelebrar = (yo?.rankLevel || 0) > (yo?.rankCelebratedLevel || 0)
+            ? estado.current
+            : null;
+
+        res.json({
+            pendingCelebration: porCelebrar,
+            totalUSD: estado.totalUSD,
+            current: estado.current,
+            next: estado.next,
+            percent: estado.percent,
+            remainingUSD: estado.remainingUSD,
+            justPromoted: !!estado.promoted,
+            ladder: ranks.map(r => ({
+                code: r.code,
+                level: r.level,
+                minUSD: r.minUSD,
+                title: r.title,
+                short: r.short,
+                lema: r.lema,
+                gradient: r.gradient,
+                accent: r.accent,
+                text: r.text,
+                reached: estado.totalUSD >= r.minUSD
+            }))
+        });
+    } catch (err) {
+        console.error('getMyRank', err);
+        res.status(500).json({ message: 'Error al obtener tu rango' });
+    }
+};
+
+// POST /affiliate/me/rank/celebrated
+// Marca que ya se le mostró la pantalla de celebración de su rango actual.
+const markRankCelebrated = async (req, res) => {
+    try {
+        const yo = await User.findById(req.user._id).select('rankLevel rankCelebratedLevel');
+        if (!yo) return res.status(404).json({ message: 'No encontrado' });
+        // Nunca baja: si ya celebró un nivel más alto, se queda como está.
+        const nivel = Math.max(yo.rankCelebratedLevel || 0, yo.rankLevel || 0);
+        await User.updateOne({ _id: yo._id }, { $set: { rankCelebratedLevel: nivel } });
+        res.json({ ok: true, rankCelebratedLevel: nivel });
+    } catch (err) {
+        console.error('markRankCelebrated', err);
+        res.status(500).json({ message: 'Error al marcar la celebración' });
     }
 };
 
@@ -261,6 +321,8 @@ const resolveAndTrackCode = async (req, res) => {
 
 module.exports = {
     getMyAffiliateSummary,
+    getMyRank,
+    markRankCelebrated,
     getMyCommissions,
     getMyReferrals,
     applyForPartner,

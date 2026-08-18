@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const { achievements, TIERS } = require('../config/achievementsConfig');
 const { recalculateAllUsers, computeTopTier } = require('../services/engagementService');
+const { recalculateAllRanks } = require('../services/rankService');
 
 // Umbral de logros por tier para promocionar (debe coincidir con engagementService).
 const TIER_THRESHOLD = 3;
@@ -78,4 +79,20 @@ const recalculateAllAchievements = async (req, res) => {
     }
 };
 
-module.exports = { getMyEngagement, recalculateAllAchievements };
+// POST /admin/ranks/recalculate-all
+// Recalcula el rango de todas las afiliadas a partir de su total facturado.
+// Sirve para sembrar los rangos la primera vez y tras ajustes de comisiones.
+// `notify=1` avisa por push a quienes suban de rango (por defecto NO, para no
+// mandar una avalancha de notificaciones en el primer sembrado).
+const recalculateAllRanksEndpoint = async (req, res) => {
+    try {
+        const notify = req.query.notify === '1' || req.body?.notify === true;
+        const r = await recalculateAllRanks({ notify });
+        res.json({ ok: true, notify, ...r });
+    } catch (err) {
+        console.error('recalculateAllRanks', err);
+        res.status(500).json({ message: 'Error al recalcular rangos' });
+    }
+};
+
+module.exports = { getMyEngagement, recalculateAllAchievements, recalculateAllRanksEndpoint };

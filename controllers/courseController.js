@@ -49,6 +49,112 @@ const getAllCourses = async (req, res) => {
     }
 };
 
+// Deduce el tipo de archivo a partir de la URL para poder agrupar y poner
+// el icono correcto en el baúl. Si el recurso ya trae un `type` útil, ese manda.
+const RESOURCE_TYPES = {
+    pdf:   ['pdf'],
+    doc:   ['doc', 'docx', 'odt', 'rtf', 'txt'],
+    sheet: ['xls', 'xlsx', 'csv', 'ods'],
+    slide: ['ppt', 'pptx', 'odp'],
+    image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'avif'],
+    audio: ['mp3', 'wav', 'm4a', 'ogg'],
+    video: ['mp4', 'mov', 'avi', 'mkv', 'webm'],
+    zip:   ['zip', 'rar', '7z']
+};
+
+function detectResourceType(resource) {
+    const declarado = (resource?.type || '').toLowerCase().trim();
+    if (declarado && declarado !== 'file' && declarado !== 'link') return declarado;
+
+    const url = (resource?.url || '').split('?')[0].split('#')[0];
+    const ext = (url.split('.').pop() || '').toLowerCase();
+    for (const [tipo, exts] of Object.entries(RESOURCE_TYPES)) {
+        if (exts.includes(ext)) return tipo;
+    }
+
+    // Servicios conocidos que no exponen extensión en la URL.
+    if (/drive\.google\.com|docs\.google\.com/i.test(url)) return 'doc';
+    if (/canva\.com/i.test(url)) return 'slide';
+    if (/youtube\.com|youtu\.be|vimeo\.com|loom\.com/i.test(url)) return 'video';
+    if (/notion\.so|notion\.site/i.test(url)) return 'doc';
+
+    return declarado || 'link';
+}
+
+// @desc    Baúl de contenido: todos los recursos agrupados por curso y módulo
+// @route   GET /api/courses/vault
+// @access  Privado (cualquier alumna autenticada)
+const getContentVault = async (req, res) => {
+    try {
+        const courses = await Course.find()
+            .select('title thumbnail modules createdAt')
+            .sort({ createdAt: 1 })
+            .lean();
+
+        let totalResources = 0;
+        const tiposPresentes = new Set();
+
+        const salida = courses.map(course => {
+            const modules = (course.modules || [])
+                .slice()
+                .sort((a, b) => (a.order || 0) - (b.order || 0))
+                .map(mod => {
+                    // Aplanamos los recursos del módulo conservando de qué clase salen:
+                    // así el baúl se puede recorrer por módulo sin abrir cada lección.
+                    const resources = [];
+                    const lessons = (mod.lessons || [])
+                        .slice()
+                        .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+                    for (const lesson of lessons) {
+                        for (const res of (lesson.resources || [])) {
+                            if (!res?.url) continue;
+                            const type = detectResourceType(res);
+                            tiposPresentes.add(type);
+                            totalResources += 1;
+                            resources.push({
+                                _id: String(res._id || ''),
+                                label: res.label || 'Recurso sin nombre',
+                                url: res.url,
+                                type,
+                                lessonId: String(lesson._id || ''),
+                                lessonTitle: lesson.title || ''
+                            });
+                        }
+                    }
+
+                    return {
+                        _id: String(mod._id || ''),
+                        title: mod.title || 'Módulo sin título',
+                        order: mod.order || 0,
+                        resourceCount: resources.length,
+                        resources
+                    };
+                })
+                // Los módulos sin material no aportan nada al baúl.
+                .filter(m => m.resourceCount > 0);
+
+            return {
+                _id: String(course._id),
+                title: course.title,
+                thumbnail: course.thumbnail || null,
+                resourceCount: modules.reduce((n, m) => n + m.resourceCount, 0),
+                modules
+            };
+        }).filter(c => c.resourceCount > 0);
+
+        res.json({
+            totalResources,
+            totalCourses: salida.length,
+            types: [...tiposPresentes].sort(),
+            courses: salida
+        });
+    } catch (error) {
+        console.error('[baul] error:', error);
+        res.status(500).json({ message: 'Error al cargar el baúl de contenido' });
+    }
+};
+
 // @desc    Obtener un solo curso
 // @route   GET /api/courses/:id
 const getCourse = async (req, res) => {
@@ -251,10 +357,11 @@ const deleteResource = async (req, res) => {
 };
 
 // ¡ACTUALIZA EL EXPORT!
-module.exports = { 
-    createCourse, 
-    getAllCourses, 
-    getCourse, 
+module.exports = {
+    createCourse,
+    getAllCourses,
+    getContentVault,
+    getCourse,
     updateCourse, 
     deleteCourse,
     addModule,   // Nuevo

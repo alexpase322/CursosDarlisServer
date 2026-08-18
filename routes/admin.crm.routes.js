@@ -18,7 +18,7 @@ const { syncPayments } = require('../controllers/stripe.sync.controller');
 const { listSubscriptions, registerManualPayment, backfillSubscriptionsFromPayments } = require('../controllers/admin.subscriptions.controller');
 const { getMonthlyRevenue } = require('../controllers/admin.revenue.controller');
 const { getKpis } = require('../controllers/admin.kpis.controller');
-const { recalculateAllAchievements } = require('../controllers/engagement.controller');
+const { recalculateAllAchievements, recalculateAllRanksEndpoint } = require('../controllers/engagement.controller');
 const { listPayments, diagnose } = require('../controllers/admin.payments.controller');
 const { reassignReferrer, getUserReferrerInfo } = require('../controllers/admin.referrer.controller');
 const { getPromo, updatePromo } = require('../controllers/admin.promos.controller');
@@ -49,6 +49,7 @@ router.get('/revenue/monthly', getMonthlyRevenue);
 
 router.get('/kpis', getKpis);
 router.post('/achievements/recalculate-all', recalculateAllAchievements);
+router.post('/ranks/recalculate-all', recalculateAllRanksEndpoint);
 
 router.get('/payments', listPayments);
 router.get('/payments/diagnose', diagnose);

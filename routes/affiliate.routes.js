@@ -4,6 +4,8 @@ const { protect } = require('../middleware/authMiddleware');
 const { referralLinkLimiter } = require('../middleware/security');
 const {
     getMyAffiliateSummary,
+    getMyRank,
+    markRankCelebrated,
     getMyCommissions,
     getMyReferrals,
     applyForPartner,
@@ -27,6 +29,8 @@ const partnerOnly = (req, res, next) => {
 router.get('/r/:code', referralLinkLimiter, resolveAndTrackCode);
 
 router.get('/me', protect, partnerOnly, getMyAffiliateSummary);
+router.get('/me/rank', protect, partnerOnly, getMyRank);
+router.post('/me/rank/celebrated', protect, partnerOnly, markRankCelebrated);
 router.get('/me/link', protect, partnerOnly, getMyReferralLink);
 router.put('/me/link', protect, partnerOnly, updateMyReferralCode);
 router.get('/me/commissions', protect, partnerOnly, getMyCommissions);

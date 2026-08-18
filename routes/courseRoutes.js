@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { createCourse, getAllCourses, getCourse, updateCourse, deleteCourse, addLesson, addModule, deleteLesson, deleteModule, addResource, deleteResource} = require('../controllers/courseController');
+const { createCourse, getAllCourses, getContentVault, getCourse, updateCourse, deleteCourse, addLesson, addModule, deleteLesson, deleteModule, addResource, deleteResource} = require('../controllers/courseController');
 const { protect, admin } = require('../middleware/authMiddleware');
 const { singleImage } = require('../config/upload');
 
 router.route('/')
     .get(protect, getAllCourses)
     .post(protect, admin, singleImage('thumbnail'), createCourse);
+
+// Baúl de contenido. DEBE ir antes de '/:id', si no Express interpreta
+// "vault" como un id de curso y devuelve 404.
+router.get('/vault', protect, getContentVault);
 
 // Rutas específicas por ID (GET, PUT, DELETE)
 router.route('/:id')
