@@ -78,7 +78,7 @@ const listAffiliates = async (req, res) => {
                     ? { code: guardado.code, level: guardado.level, title: guardado.title,
                         gradient: guardado.gradient, accent: guardado.accent, reachedAt: u.rankReachedAt || null }
                     : null,
-                rankPending: (guardado?.level ?? -1) < segunTotal.level
+                rankPending: (guardado?.level ?? 0) < segunTotal.level
                     ? { code: segunTotal.code, level: segunTotal.level, title: segunTotal.title }
                     : null,
                 referralStats: {
