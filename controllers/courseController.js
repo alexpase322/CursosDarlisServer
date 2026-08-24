@@ -178,9 +178,20 @@ const updateCourse = async (req, res) => {
         const course = await Course.findById(req.params.id);
         if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
 
-        // Actualizar campos básicos
-        course.title = req.body.title || course.title;
-        course.description = req.body.description || course.description;
+        // `!== undefined` en vez de `||`: con `||` un campo enviado vacío se
+        // confundía con "no enviado" y el error salía como 500 del esquema.
+        // Título y descripción son obligatorios en Course, así que se rechazan
+        // vacíos con un 400 que la UI puede mostrar.
+        if (req.body.title !== undefined) {
+            const t = String(req.body.title).trim();
+            if (!t) return res.status(400).json({ message: 'El título no puede quedar vacío' });
+            course.title = t;
+        }
+        if (req.body.description !== undefined) {
+            const d = String(req.body.description).trim();
+            if (!d) return res.status(400).json({ message: 'La descripción no puede quedar vacía' });
+            course.description = d;
+        }
 
         // Si hay nueva imagen
         if (req.file) {
@@ -196,6 +207,10 @@ const updateCourse = async (req, res) => {
         const updatedCourse = await course.save();
         res.json(updatedCourse);
     } catch (error) {
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: Object.values(error.errors)[0]?.message || 'Datos inválidos' });
+        }
+        console.error('updateCourse', error);
         res.status(500).json({ message: 'Error al actualizar curso' });
     }
 };
@@ -357,6 +372,114 @@ const deleteResource = async (req, res) => {
 };
 
 // ¡ACTUALIZA EL EXPORT!
+// Busca un módulo dentro del curso y devuelve [course, module] o null.
+async function findModule(courseId, moduleId) {
+    const course = await Course.findById(courseId);
+    if (!course) return [null, null];
+    return [course, course.modules.id(moduleId)];
+}
+
+// @desc    Renombrar / reordenar un módulo
+// @route   PUT /api/courses/:id/modules/:moduleId
+// @access  Privado (Admin)
+const updateModule = async (req, res) => {
+    try {
+        const [course, mod] = await findModule(req.params.id, req.params.moduleId);
+        if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
+        if (!mod) return res.status(404).json({ message: 'Módulo no encontrado' });
+
+        if (req.body.title !== undefined) {
+            const t = String(req.body.title).trim();
+            if (!t) return res.status(400).json({ message: 'El título del módulo no puede quedar vacío' });
+            mod.title = t;
+        }
+        if (req.body.order !== undefined && Number.isFinite(Number(req.body.order))) {
+            mod.order = Number(req.body.order);
+        }
+
+        await course.save();
+        res.json(course);
+    } catch (error) {
+        console.error('updateModule', error);
+        res.status(500).json({ message: 'Error al actualizar el módulo' });
+    }
+};
+
+// @desc    Editar una clase (título, video, descripción)
+// @route   PUT /api/courses/:id/modules/:moduleId/lessons/:lessonId
+// @access  Privado (Admin)
+const updateLesson = async (req, res) => {
+    try {
+        const [course, mod] = await findModule(req.params.id, req.params.moduleId);
+        if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
+        if (!mod) return res.status(404).json({ message: 'Módulo no encontrado' });
+
+        const lesson = mod.lessons.id(req.params.lessonId);
+        if (!lesson) return res.status(404).json({ message: 'Clase no encontrada' });
+
+        if (req.body.title !== undefined) {
+            const t = String(req.body.title).trim();
+            if (!t) return res.status(400).json({ message: 'El título de la clase no puede quedar vacío' });
+            lesson.title = t;
+        }
+        if (req.body.videoUrl !== undefined) {
+            const v = String(req.body.videoUrl).trim();
+            // videoUrl es obligatorio en el esquema: vaciarlo rompería el guardado.
+            if (!v) return res.status(400).json({ message: 'La clase necesita una URL de video' });
+            lesson.videoUrl = v;
+        }
+        if (req.body.description !== undefined) {
+            lesson.description = String(req.body.description).trim();
+        }
+        if (req.body.order !== undefined && Number.isFinite(Number(req.body.order))) {
+            lesson.order = Number(req.body.order);
+        }
+
+        await course.save();
+        res.json(course);
+    } catch (error) {
+        console.error('updateLesson', error);
+        res.status(500).json({ message: 'Error al actualizar la clase' });
+    }
+};
+
+// @desc    Editar un recurso (nombre o enlace)
+// @route   PUT /api/courses/:id/modules/:moduleId/lessons/:lessonId/resources/:resourceId
+// @access  Privado (Admin)
+const updateResource = async (req, res) => {
+    try {
+        const [course, mod] = await findModule(req.params.id, req.params.moduleId);
+        if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
+        if (!mod) return res.status(404).json({ message: 'Módulo no encontrado' });
+
+        const lesson = mod.lessons.id(req.params.lessonId);
+        if (!lesson) return res.status(404).json({ message: 'Clase no encontrada' });
+
+        const resource = lesson.resources.id(req.params.resourceId);
+        if (!resource) return res.status(404).json({ message: 'Recurso no encontrado' });
+
+        if (req.body.label !== undefined) {
+            const l = String(req.body.label).trim();
+            if (!l) return res.status(400).json({ message: 'El recurso necesita un nombre' });
+            resource.label = l;
+        }
+        if (req.body.url !== undefined) {
+            const u = String(req.body.url).trim();
+            if (!u) return res.status(400).json({ message: 'El recurso necesita un enlace' });
+            resource.url = u;
+        }
+        if (req.body.type !== undefined) {
+            resource.type = String(req.body.type).trim() || 'file';
+        }
+
+        await course.save();
+        res.json(course);
+    } catch (error) {
+        console.error('updateResource', error);
+        res.status(500).json({ message: 'Error al actualizar el recurso' });
+    }
+};
+
 module.exports = {
     createCourse,
     getAllCourses,
@@ -369,5 +492,8 @@ module.exports = {
     deleteModule,
     deleteLesson,
     deleteResource,
-    addResource
+    addResource,
+    updateModule,
+    updateLesson,
+    updateResource
 };

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createCourse, getAllCourses, getContentVault, getCourse, updateCourse, deleteCourse, addLesson, addModule, deleteLesson, deleteModule, addResource, deleteResource} = require('../controllers/courseController');
+const { createCourse, getAllCourses, getContentVault, getCourse, updateCourse, deleteCourse, addLesson, addModule, deleteLesson, deleteModule, addResource, deleteResource, updateModule, updateLesson, updateResource} = require('../controllers/courseController');
 const { protect, admin } = require('../middleware/authMiddleware');
 const { singleImage } = require('../config/upload');
 
@@ -26,16 +26,19 @@ router.route('/:id/modules/:moduleId/lessons')
     .post(protect, admin, addLesson);
 
 router.route('/:id/modules/:moduleId')
-    .delete(protect, admin, deleteModule); // <--- NUEVO
+    .put(protect, admin, updateModule)
+    .delete(protect, admin, deleteModule);
 
 // Modifica esta sección para incluir DELETE en lecciones
 router.route('/:id/modules/:moduleId/lessons/:lessonId')
-    .delete(protect, admin, deleteLesson); // <--- NUEVO
+    .put(protect, admin, updateLesson)
+    .delete(protect, admin, deleteLesson);
 
 router.route('/:id/modules/:moduleId/lessons/:lessonId/resources')
     .post(protect, admin, addResource);
 
 router.route('/:id/modules/:moduleId/lessons/:lessonId/resources/:resourceId')
+    .put(protect, admin, updateResource)
     .delete(protect, admin, deleteResource);
 
 module.exports = router;
