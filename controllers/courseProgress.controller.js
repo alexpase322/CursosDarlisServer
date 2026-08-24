@@ -96,7 +96,10 @@ const getMyCourseProgress = async (req, res) => {
 const getAllMyProgress = async (req, res) => {
     try {
         const userId = req.user._id;
-        const courses = await Course.find({}).select('title thumbnail modules').lean();
+        const courses = await Course.find({})
+            .select('title thumbnail modules order')
+            .sort({ order: 1, createdAt: 1 })
+            .lean();
         const Quiz = require('../models/Quiz');
 
         const items = await Promise.all(courses.map(async (c) => {

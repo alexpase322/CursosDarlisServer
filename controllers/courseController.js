@@ -22,10 +22,14 @@ const createCourse = async (req, res) => {
             fs.unlinkSync(req.file.path); // Limpiar servidor
         }
 
+        // Entra al final del listado, igual que módulos y clases.
+        const total = await Course.countDocuments();
+
         const course = await Course.create({
             title,
             description,
             thumbnail,
+            order: total,
             instructor: req.user._id // El admin que lo crea es el instructor
         });
 
@@ -42,7 +46,9 @@ const createCourse = async (req, res) => {
 const getAllCourses = async (req, res) => {
     try {
         // .populate trae los datos del instructor en vez de solo su ID
-        const courses = await Course.find().populate('instructor', 'username avatar');
+        const courses = await Course.find()
+            .populate('instructor', 'username avatar')
+            .sort({ order: 1, createdAt: 1 });
         res.json(courses);
     } catch (error) {
         res.status(500).json({ message: 'Error al obtener cursos' });
@@ -87,8 +93,8 @@ function detectResourceType(resource) {
 const getContentVault = async (req, res) => {
     try {
         const courses = await Course.find()
-            .select('title thumbnail modules createdAt')
-            .sort({ createdAt: 1 })
+            .select('title thumbnail modules createdAt order')
+            .sort({ order: 1, createdAt: 1 })
             .lean();
 
         let totalResources = 0;
@@ -239,8 +245,9 @@ const addModule = async (req, res) => {
 
         const { title } = req.body;
         
-        // Mongoose crea automáticamente un _id para este subdocumento
-        course.modules.push({ title, lessons: [] });
+        // `order` va al final de la lista: el baúl ordena por este campo, y sin
+        // asignarlo todo nacería con 0 y se colaría al principio tras reordenar.
+        course.modules.push({ title, lessons: [], order: course.modules.length });
         
         await course.save();
         res.json(course); // Devolvemos el curso completo actualizado
@@ -263,8 +270,8 @@ const addLesson = async (req, res) => {
         
         if (!module) return res.status(404).json({ message: 'Módulo no encontrado' });
 
-        // Agregar la lección
-        module.lessons.push({ title, videoUrl, description });
+        // Igual que en los módulos: la clase nueva va al final del orden.
+        module.lessons.push({ title, videoUrl, description, order: module.lessons.length });
 
         await course.save();
         res.json(course);
@@ -480,6 +487,153 @@ const updateResource = async (req, res) => {
     }
 };
 
+// Comprueba que la lista recibida sea una permutación EXACTA de los ids
+// actuales. Si el cliente manda una lista desfasada (porque alguien creó o
+// borró algo mientras tanto), se rechaza en vez de perder elementos.
+function validarPermutacion(actuales, recibidos) {
+    if (!Array.isArray(recibidos)) return 'Falta la lista de orden';
+    if (recibidos.length !== actuales.length) return 'La lista de orden no coincide con el contenido actual';
+    const a = [...actuales].sort();
+    const b = [...recibidos].map(String).sort();
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return 'La lista de orden no coincide con el contenido actual';
+    }
+    return null;
+}
+
+// @desc    Reordenar los módulos de un curso
+// @route   PUT /api/courses/:id/modules/reorder
+// @access  Privado (Admin)
+const reorderModules = async (req, res) => {
+    try {
+        const course = await Course.findById(req.params.id);
+        if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
+
+        const actuales = course.modules.map(m => String(m._id));
+        const error = validarPermutacion(actuales, req.body.order);
+        if (error) return res.status(400).json({ message: error });
+
+        // Se reordena el ARRAY, no solo el campo `order`: las vistas del curso
+        // recorren el array tal cual, así que mover solo `order` no se notaría
+        // ahí y además dejaría el baúl (que sí ordena) diciendo otra cosa.
+        // Se pasa por toObject() para que Mongoose recast e la lista limpia.
+        const ordenados = req.body.order.map((mid, i) => {
+            const m = course.modules.id(mid).toObject();
+            m.order = i;
+            return m;
+        });
+        course.modules = ordenados;
+
+        await course.save();
+        res.json(course);
+    } catch (error) {
+        console.error('reorderModules', error);
+        res.status(500).json({ message: 'Error al reordenar los módulos' });
+    }
+};
+
+// @desc    Reordenar las clases de un módulo
+// @route   PUT /api/courses/:id/modules/:moduleId/lessons/reorder
+// @access  Privado (Admin)
+const reorderLessons = async (req, res) => {
+    try {
+        const [course, mod] = await findModule(req.params.id, req.params.moduleId);
+        if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
+        if (!mod) return res.status(404).json({ message: 'Módulo no encontrado' });
+
+        const actuales = mod.lessons.map(l => String(l._id));
+        const error = validarPermutacion(actuales, req.body.order);
+        if (error) return res.status(400).json({ message: error });
+
+        const ordenadas = req.body.order.map((lid, i) => {
+            const l = mod.lessons.id(lid).toObject();
+            l.order = i;
+            return l;
+        });
+        mod.lessons = ordenadas;
+
+        await course.save();
+        res.json(course);
+    } catch (error) {
+        console.error('reorderLessons', error);
+        res.status(500).json({ message: 'Error al reordenar las clases' });
+    }
+};
+
+// @desc    Mover una clase a otro módulo del mismo curso
+// @route   PUT /api/courses/:id/modules/:moduleId/lessons/:lessonId/move
+// @access  Privado (Admin)
+const moveLesson = async (req, res) => {
+    try {
+        const { targetModuleId } = req.body;
+        if (!targetModuleId) return res.status(400).json({ message: 'Falta el módulo de destino' });
+
+        const course = await Course.findById(req.params.id);
+        if (!course) return res.status(404).json({ message: 'Curso no encontrado' });
+
+        const origen = course.modules.id(req.params.moduleId);
+        if (!origen) return res.status(404).json({ message: 'Módulo de origen no encontrado' });
+
+        const destino = course.modules.id(targetModuleId);
+        if (!destino) return res.status(404).json({ message: 'Módulo de destino no encontrado' });
+
+        if (String(origen._id) === String(destino._id)) {
+            return res.status(400).json({ message: 'La clase ya está en ese módulo' });
+        }
+
+        const lesson = origen.lessons.id(req.params.lessonId);
+        if (!lesson) return res.status(404).json({ message: 'Clase no encontrada' });
+
+        // Se mueve el subdocumento ENTERO tal cual: conserva su _id, sus
+        // recursos y sobre todo `completedBy`, que es donde vive el progreso de
+        // las alumnas. Recrearlo desde cero les borraría el avance.
+        const copia = lesson.toObject();
+        origen.lessons.pull({ _id: lesson._id });
+
+        copia.order = destino.lessons.length;   // entra al final del destino
+        destino.lessons.push(copia);
+
+        // El origen queda con un hueco en la numeración: se renumera.
+        origen.lessons.forEach((l, i) => { l.order = i; });
+
+        await course.save();
+        res.json(course);
+    } catch (error) {
+        console.error('moveLesson', error);
+        res.status(500).json({ message: 'Error al mover la clase' });
+    }
+};
+
+// @desc    Reordenar los cursos del listado
+// @route   PUT /api/courses/reorder
+// @access  Privado (Admin)
+const reorderCourses = async (req, res) => {
+    try {
+        const { order } = req.body;
+        if (!Array.isArray(order)) return res.status(400).json({ message: 'Falta la lista de orden' });
+
+        const actuales = (await Course.find().select('_id').lean()).map(c => String(c._id));
+        const error = validarPermutacion(actuales, order);
+        if (error) return res.status(400).json({ message: error });
+
+        // Los cursos son documentos sueltos, no un array: aquí el único orden
+        // posible es el campo `order`, y por eso los tres listados lo usan.
+        await Course.bulkWrite(
+            order.map((cid, i) => ({
+                updateOne: { filter: { _id: cid }, update: { $set: { order: i } } }
+            }))
+        );
+
+        const courses = await Course.find()
+            .populate('instructor', 'username avatar')
+            .sort({ order: 1, createdAt: 1 });
+        res.json(courses);
+    } catch (error) {
+        console.error('reorderCourses', error);
+        res.status(500).json({ message: 'Error al reordenar los cursos' });
+    }
+};
+
 module.exports = {
     createCourse,
     getAllCourses,
@@ -495,5 +649,9 @@ module.exports = {
     addResource,
     updateModule,
     updateLesson,
-    updateResource
+    updateResource,
+    reorderModules,
+    reorderLessons,
+    moveLesson,
+    reorderCourses
 };

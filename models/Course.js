@@ -28,6 +28,10 @@ const courseSchema = new mongoose.Schema({
     title: { type: String, required: true },
     description: { type: String, required: true },
     thumbnail: { type: String }, // Imagen de portada del curso
+    // Posición en el listado. Los cursos antiguos no lo tienen: al ordenar por
+    // { order, createdAt } quedan todos empatados y manda la fecha, que es el
+    // orden que ya se veía. El primer reordenamiento les asigna 0..n-1.
+    order: { type: Number, default: 0 },
     instructor: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     modules: [moduleSchema], // Array de módulos incrustados
     students: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }] // Usuarios inscritos
