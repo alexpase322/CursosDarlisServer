@@ -67,7 +67,13 @@ const ask = async (req, res) => {
             SIN_CONEXION: 'La tutora no está disponible en este momento. Inténtalo en unos minutos.',
             PROVEEDOR_ERROR: 'La tutora tuvo un problema al responder. Inténtalo de nuevo.'
         };
-        return res.status(503).json({ message: mensajes[err.code] || 'La tutora no está disponible ahora mismo.' });
+        return res.status(503).json({
+            message: mensajes[err.code] || 'La tutora no está disponible ahora mismo.',
+            // A las alumnas se les da el mensaje amable; a quien administra se
+            // le da el error real del proveedor, que es lo único que sirve para
+            // arreglarlo (modelo mal escrito, clave inválida, URL incorrecta…).
+            ...(req.user?.role === 'admin' ? { detalle: err.message, codigo: err.code } : {})
+        });
     }
 
     // A partir de aquí la respuesta ya está abierta: los errores se mandan
@@ -139,9 +145,35 @@ const available = (req, res) => {
     res.json({ available: estaConfigurado() });
 };
 
-// GET /tutor/health  → diagnóstico completo para el panel de admin
+// GET /tutor/health  → diagnóstico completo para el panel de admin.
+// Además de listar modelos, hace una pregunta mínima de verdad: listar el
+// catálogo puede salir bien y aun así fallar el chat (modelo retirado, clave sin
+// permiso para generar, cuota agotada). Es el error de la prueba real el que
+// dice qué arreglar.
 const health = async (req, res) => {
-    res.json(await estado());
+    const base = await estado();
+
+    let prueba = { intentada: false };
+    if (base.ok) {
+        try {
+            const r = await preguntarStream({
+                contexto: {
+                    course: { title: 'Prueba', description: '' },
+                    module: { title: 'Prueba' },
+                    lesson: { title: 'Prueba', description: '', resources: [] }
+                },
+                historial: [],
+                pregunta: 'Responde solo con la palabra OK.'
+            });
+            r.res.body?.cancel?.().catch?.(() => {});
+            r.cancelar();
+            prueba = { intentada: true, ok: true };
+        } catch (err) {
+            prueba = { intentada: true, ok: false, codigo: err.code, detalle: err.message };
+        }
+    }
+
+    res.json({ ...base, ok: base.ok && (!prueba.intentada || prueba.ok === true), prueba });
 };
 
 module.exports = { ask, available, health };
