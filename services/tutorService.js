@@ -150,7 +150,11 @@ async function preguntarStream({ contexto, historial = [], pregunta }) {
         if (!res.ok) {
             const detalle = await res.text().catch(() => '');
             const e = new Error(`El proveedor de IA respondió ${res.status}: ${detalle.slice(0, 200)}`);
-            e.code = 'PROVEEDOR_ERROR';
+            // 429 = cuota de la capa gratuita agotada (por minuto o por día).
+            // No es una avería: merece un mensaje distinto, porque se arregla
+            // solo esperando y decirle "hubo un problema" la haría reintentar.
+            e.code = res.status === 429 ? 'SIN_CUOTA' : 'PROVEEDOR_ERROR';
+            e.reintentarEn = res.headers.get('retry-after') || null;
             throw e;
         }
 

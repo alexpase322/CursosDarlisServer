@@ -65,7 +65,8 @@ const ask = async (req, res) => {
         const mensajes = {
             TIMEOUT: 'La tutora tardó demasiado. Intenta con una pregunta más corta.',
             SIN_CONEXION: 'La tutora no está disponible en este momento. Inténtalo en unos minutos.',
-            PROVEEDOR_ERROR: 'La tutora tuvo un problema al responder. Inténtalo de nuevo.'
+            PROVEEDOR_ERROR: 'La tutora tuvo un problema al responder. Inténtalo de nuevo.',
+            SIN_CUOTA: 'Ahora mismo hay muchas alumnas preguntando. Espera unos minutos y vuelve a intentarlo.'
         };
         return res.status(503).json({
             message: mensajes[err.code] || 'La tutora no está disponible ahora mismo.',
