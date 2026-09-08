@@ -16,6 +16,7 @@ const courseProgressRoutes = require('./routes/courseProgress.routes');
 const quizRoutes = require('./routes/quiz.routes');
 const leaderboardRoutes = require('./routes/leaderboard.routes');
 const engagementRoutes = require('./routes/engagement.routes');
+const tutorRoutes = require('./routes/tutor.routes');
 const webinarRoutes = require('./routes/webinar.routes');
 const promosRoutes = require('./routes/promos.routes');
 const testimonialRoutes = require('./routes/testimonial.routes');
@@ -188,6 +189,7 @@ app.use('/courses', courseProgressRoutes);
 app.use('/quizzes', quizRoutes);
 app.use('/leaderboard', leaderboardRoutes);
 app.use('/engagement', engagementRoutes);
+app.use('/tutor', tutorRoutes);
 // Formularios públicos (webinar): anti-spam.
 app.use('/webinar', publicFormLimiter, webinarRoutes);
 app.use('/promos', promosRoutes);
