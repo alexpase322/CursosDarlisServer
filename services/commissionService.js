@@ -250,7 +250,7 @@ async function recordCommissionFromInvoice(invoice, opts = {}) {
     return commission;
 }
 
-// Comisión de una venta de PAGO ÚNICO (ej. plan lifetime $247 → $197 para la afiliada).
+// Comisión de una venta de PAGO ÚNICO (ej. plan lifetime $297 → 80% = $237.60 para la afiliada).
 // Los pagos únicos de Stripe no generan invoice, así que usamos el id del
 // checkout session / payment_intent como clave de idempotencia.
 // `payoutSource: 'beacons'` marca la comisión como YA PAGADA: en las ventas de

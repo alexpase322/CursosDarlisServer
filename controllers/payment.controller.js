@@ -228,9 +228,9 @@ const stripeWebhook = async (req, res) => {
 
 // --- Helpers ---
 
-// Compra de PAGO ÚNICO (plan lifetime $247).
+// Compra de PAGO ÚNICO (plan lifetime $297).
 // Otorga: acceso de por vida + activación automática como Partner (N2) + su link
-// de afiliada, y paga la comisión fija ($197) a quien la refirió.
+// de afiliada, y paga la comisión (80% de lo cobrado) a quien la refirió.
 const handleOneTimePurchase = async (session) => {
     const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const meta = session.metadata || {};
@@ -396,7 +396,7 @@ const handleCheckoutSuccess = async (session) => {
     const userId = session.metadata && session.metadata.userId;
     const subscriptionId = session.subscription;
 
-    // Pago único (plan lifetime $247): no crea suscripción en Stripe.
+    // Pago único (plan lifetime $297): no crea suscripción en Stripe.
     if (!subscriptionId || session.mode === 'payment') {
         if (session.mode === 'payment') {
             await handleOneTimePurchase(session);

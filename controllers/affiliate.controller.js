@@ -2,7 +2,7 @@ const User = require('../models/User');
 const Commission = require('../models/Commission');
 const PartnerApplication = require('../models/PartnerApplication');
 const Payment = require('../models/Payment');
-const { rates, prices, flatCommissions } = require('../config/affiliateConfig');
+const { rates, prices, calculateCommission } = require('../config/affiliateConfig');
 const { ranks } = require('../config/rankConfig');
 const { refreshRank } = require('../services/rankService');
 const {
@@ -261,10 +261,23 @@ const getMyReferralLink = async (req, res) => {
             link: buildReferralLink(code),
             clicks: fresh?.referralClicks || 0,
             signups: fresh?.referralSignups || 0,
-            // Cuánto gana por cada plan a la venta (solo los planes vigentes)
+            // Cuánto gana por cada plan a la venta (solo los planes vigentes).
+            // Se calcula con calculateCommission en vez de multiplicar a mano:
+            // así da igual que un plan cobre porcentaje o monto fijo, y no hay
+            // dos sitios que puedan quedar desalineados.
             earnings: {
-                monthly:  { price: prices.monthly,  commission: +(prices.monthly * rates.monthly).toFixed(2), recurrente: true },
-                lifetime: { price: prices.lifetime, commission: flatCommissions.lifetime,                     recurrente: false }
+                monthly: {
+                    price: prices.monthly,
+                    commission: calculateCommission('monthly', prices.monthly)?.amountUSD ?? 0,
+                    percent: calculateCommission('monthly', prices.monthly)?.percent ?? 0,
+                    recurrente: true
+                },
+                lifetime: {
+                    price: prices.lifetime,
+                    commission: calculateCommission('lifetime', prices.lifetime)?.amountUSD ?? 0,
+                    percent: calculateCommission('lifetime', prices.lifetime)?.percent ?? 0,
+                    recurrente: false
+                }
             }
         });
     } catch (err) {

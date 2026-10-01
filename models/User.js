@@ -48,7 +48,7 @@ const userSchema = new mongoose.Schema({
         currentPeriodEnd: Date,
         customerId: String
     },
-    // Acceso vitalicio (plan de pago único $247). Si es true, el acceso nunca vence
+    // Acceso vitalicio (plan de pago único $297). Si es true, el acceso nunca vence
     // y los crons de vencimiento lo ignoran.
     lifetimeAccess: { type: Boolean, default: false },
     lifetimeGrantedAt: { type: Date, default: null },

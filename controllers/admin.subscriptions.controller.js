@@ -119,7 +119,7 @@ const listSubscriptions = async (req, res) => {
 // pueda solicitar afiliarse. Crea un Payment con id sintético `manual_<userId>_<ts>` y,
 // opcionalmente, sincroniza User.subscription para que el panel la muestre como activa.
 const PLAN_DURATIONS_DAYS = { monthly: 30, quarterly: 90, yearly: 365 };
-const PLAN_PRICES_USD = { monthly: 50, quarterly: 120, yearly: 397, lifetime: 247 };
+const PLAN_PRICES_USD = { monthly: 50, quarterly: 120, yearly: 397, lifetime: 297 };
 
 const registerManualPayment = async (req, res) => {
     try {

@@ -120,7 +120,7 @@ const reassignReferrer = async (req, res) => {
 
                 const plan = p.plan || 'monthly';
                 // Usar calculateCommission: soporta tanto % (mensual) como monto
-                // fijo (lifetime → $197). Antes se usaba rates[plan], que es
+                // fijo si lo hubiera. Antes se usaba rates[plan], que es
                 // undefined para lifetime y saltaba el pago sin crear comisión.
                 const calc = calculateCommission(plan, p.amountUSD);
                 if (!calc) {

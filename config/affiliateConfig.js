@@ -1,7 +1,7 @@
 // Configuración del programa de afiliadas.
 // Las claves STRIPE_PRICE_* las rellena el admin en .env con los IDs reales de Stripe.
 
-// PLANES A LA VENTA hoy: solo mensual ($50) y pago único ($247).
+// PLANES A LA VENTA hoy: solo mensual ($50) y pago único ($297).
 // `quarterly` y `yearly` quedan DESCONTINUADOS: ya no se ofrecen en la landing,
 // pero se mantienen aquí para que las alumnas que ya los tienen sigan renovando
 // y generando su comisión correctamente. No borrar.
@@ -14,19 +14,21 @@ const rates = {
     monthly: 0.40,
     quarterly: 0.40,  // legacy
     yearly: 0.50      // legacy
+    , lifetime: 0.80  // 80% del valor cobrado
 };
 
-// Comisiones de monto FIJO (planes de pago único). Tienen prioridad sobre `rates`.
-// lifetime: $247 → $197 para la afiliada, $50 para Arquitecta.
-const flatCommissions = {
-    lifetime: 197
-};
+// Comisiones de monto FIJO. Tienen prioridad sobre `rates` si se definen.
+// `lifetime` SALIÓ de aquí: su comisión ahora es el 80% de lo cobrado, no una
+// cifra fija. Además de seguir al precio si vuelve a cambiar, esto corrige un
+// problema real: con los $197 fijos, una venta de Beacons cobrada a plazos
+// (hemos visto cuotas de $100) pagaba más comisión que el propio ingreso.
+const flatCommissions = {};
 
 const prices = {
     monthly: 50,
     quarterly: 120,   // legacy
     yearly: 397,      // legacy
-    lifetime: 247
+    lifetime: 297     // → comisión del 80% = $237.60
 };
 
 // Planes de pago único (Stripe checkout en mode:'payment', no 'subscription').
@@ -34,7 +36,7 @@ const oneTimePlans = ['lifetime'];
 const isOneTimePlan = (plan) => oneTimePlans.includes(plan);
 
 // Price IDs de lifetime CONOCIDOS (además del que esté en STRIPE_PRICE_LIFETIME).
-// Se pueden tener varios precios de $247 para el mismo producto de pago único.
+// Se pueden tener varios precios para el mismo producto de pago único.
 // Añadir aquí cualquier price nuevo de pago único garantiza detección exacta.
 const KNOWN_LIFETIME_PRICE_IDS = [
     'price_1TwRRIDP5qCZDXVtNjnVkXkn'
@@ -54,11 +56,11 @@ for (const id of KNOWN_LIFETIME_PRICE_IDS) stripePriceMap[id] = 'lifetime';
 // La cuenta de Stripe también recibe pagos de OTROS negocios cuyos montos se
 // parecen ($199, $250, $170…). Adivinar el plan por el monto daba accesos por
 // error, así que la fuente de verdad es el PRODUCTO de Stripe.
-// Ventaja: un producto puede tener varios precios (hoy $197, mañana $247) y
+// Ventaja: un producto puede tener varios precios (hoy $297, mañana otro) y
 // todos quedan cubiertos sin tocar código.
 // ─────────────────────────────────────────────────────────────────────────
 const arquitectaProducts = {
-    'prod_UwK5fQhEuzH6L5': 'lifetime',   // Arquitecta de tu propio éxito (único pago) — $197 promo / $247
+    'prod_UwK5fQhEuzH6L5': 'lifetime',   // Arquitecta de tu propio éxito (único pago) — cualquier precio de este producto
     'prod_Tl5UNZQLJP41ce': 'monthly',    // Membresía mensual — $50
     'prod_UBohkEJ6PB1czo': 'monthly',    // darlisfrancofv - subscription — $50
     // Legacy: ya no se venden, pero hay alumnas activas que deben seguir renovando.
@@ -86,7 +88,7 @@ if (process.env.STRIPE_EXTRA_PRODUCTS) {
 // ─────────────────────────────────────────────────────────────────────────
 const arquitectaNamePattern = /arquitecta\s+de\s+tu\s+propio\s+[éeÉE]xito/i;
 
-// Beacons solo vende el programa de pago único ($197 promo → $247).
+// Beacons solo vende el programa de pago único.
 function planFromProductName(name) {
     if (!name || typeof name !== 'string') return null;
     return arquitectaNamePattern.test(name) ? 'lifetime' : null;
@@ -193,7 +195,7 @@ function calculateCommission(plan, grossAmountUSD) {
 
 // Deduce el plan desde un line_item de Stripe usando, en orden:
 //   1) priceId mapeado en .env (STRIPE_PRICE_*)
-//   2) pago único (sin `recurring`) con monto ≈247 → lifetime
+//   2) pago único (sin `recurring`) en el rango del vitalicio → lifetime
 //   3) recurring.interval + interval_count (month×1, month×3, year×1)
 //   4) monto como último recurso
 function inferPlan({ priceId, lineItem, amountUSD } = {}) {
@@ -221,7 +223,7 @@ function inferPlan({ priceId, lineItem, amountUSD } = {}) {
     if (Number.isFinite(amt) && amt > 0) {
         // Buckets tolerantes (descuentos, impuestos, redondeo Stripe).
         if (amt >= 300) return 'yearly';
-        if (amt >= 200) return 'lifetime';   // 247 pago único
+        if (amt >= 200) return 'lifetime';   // pago único
         if (amt >= 90)  return 'quarterly';
         if (amt >= 1)   return 'monthly';
     }
