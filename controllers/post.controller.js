@@ -1,14 +1,35 @@
 const Post = require('../models/Post');
 const cloudinary = require('../config/cloudinary');
+const { esImagen } = require('../config/upload');
 const fs = require('fs');
 // IMPORTAMOS EL HELPER DE NOTIFICACIONES
 const { createNotificationInternal } = require('./notification.controller');
 const { unlockAchievement, evaluateMilestones } = require('../services/engagementService');
 
 // 1. Obtener todos los posts (El Feed)
+const TABLEROS = ['muro', 'tareas', 'anuncios'];
+// Solo las administradoras publican anuncios; el resto ve y comenta.
+const SOLO_ADMIN = ['anuncios'];
+
+const normalizarTablero = (valor) => {
+    const t = String(valor || 'muro').toLowerCase();
+    return TABLEROS.includes(t) ? t : 'muro';
+};
+
 const getPosts = async (req, res) => {
     try {
-        const posts = await Post.find()
+        // Sin filtro devolvería los tres tableros mezclados: un anuncio
+        // aparecería en el muro y una entrega de tarea también.
+        const board = normalizarTablero(req.query.board);
+
+        // Las publicaciones creadas antes de existir los tableros no tienen el
+        // campo `board`. Un filtro estricto las dejaría fuera y el muro
+        // aparecería vacío tras desplegar, así que el muro también las recoge.
+        const filtro = board === 'muro'
+            ? { $or: [{ board: 'muro' }, { board: { $exists: false } }] }
+            : { board };
+
+        const posts = await Post.find(filtro)
             .sort({ createdAt: -1 })
             .populate('author', 'username avatar role partnerLevel topAchievementTier topAchievementCode')
             .populate('comments.user', 'username avatar topAchievementTier');
@@ -23,21 +44,55 @@ const getPosts = async (req, res) => {
 const createPost = async (req, res) => {
     try {
         const { content } = req.body;
+        const board = normalizarTablero(req.body.board);
+
+        // El permiso se comprueba en el servidor, no en la interfaz: ocultar el
+        // formulario en el cliente no impide que alguien llame al endpoint.
+        if (SOLO_ADMIN.includes(board) && req.user.role !== 'admin') {
+            if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(403).json({ message: 'Solo el equipo puede publicar anuncios.' });
+        }
+
+        if (!String(content || '').trim() && !req.file) {
+            return res.status(400).json({ message: 'Escribe algo o adjunta un archivo.' });
+        }
+
         let imageUrl = '';
+        let adjunto;
 
         if (req.file) {
-            const result = await cloudinary.uploader.upload(req.file.path, {
-                folder: "lms_posts",
-                width: 800,
-                crop: "limit"
-            });
-            imageUrl = result.secure_url;
+            if (esImagen(req.file)) {
+                // Las imágenes se optimizan y se muestran dentro de la publicación.
+                const result = await cloudinary.uploader.upload(req.file.path, {
+                    folder: "lms_posts",
+                    width: 1200,
+                    crop: "limit"
+                });
+                imageUrl = result.secure_url;
+            } else {
+                // Los documentos van como `raw`: si se suben como imagen,
+                // Cloudinary intenta procesarlos y los corrompe.
+                const result = await cloudinary.uploader.upload(req.file.path, {
+                    folder: "lms_entregas",
+                    resource_type: "raw",
+                    use_filename: true,
+                    unique_filename: true
+                });
+                adjunto = {
+                    url: result.secure_url,
+                    name: req.file.originalname,
+                    mime: req.file.mimetype,
+                    size: req.file.size
+                };
+            }
             fs.unlinkSync(req.file.path);
         }
 
         const newPost = new Post({
+            board,
             content,
             image: imageUrl || undefined,
+            attachment: adjunto,
             author: req.user._id
         });
 

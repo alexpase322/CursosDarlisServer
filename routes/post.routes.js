@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const { singleImage } = require('../config/upload');
+const { singleAttachment } = require('../config/upload');
 const {
     getPosts,
     createPost,
@@ -13,7 +13,9 @@ const {
 
 // Rutas base: /api/posts
 router.get('/', protect, getPosts);
-router.post('/', protect, singleImage('image'), createPost);
+// `singleAttachment` acepta imágenes y además documentos, que es lo que
+// necesitan las entregas de tareas. El controlador distingue entre ambos.
+router.post('/', protect, singleAttachment('image'), createPost);
 router.put('/:id/like', protect, toggleLike);
 router.put('/:id/react/:type', protect, toggleReaction);
 router.post('/:id/comment', protect, addComment);

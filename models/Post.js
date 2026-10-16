@@ -1,6 +1,25 @@
 const mongoose = require('mongoose');
 
 const postSchema = new mongoose.Schema({
+    // Tablero al que pertenece. Los tres comparten comentarios, reacciones y
+    // moderación; solo cambia quién puede publicar y cómo se presenta.
+    //   muro     → cualquiera publica
+    //   tareas   → cualquiera publica, admite adjuntar archivo
+    //   anuncios → SOLO admin publica; el resto ve y comenta
+    board: {
+        type: String,
+        enum: ['muro', 'tareas', 'anuncios'],
+        default: 'muro',
+        index: true
+    },
+    // Archivo adjunto para las entregas de tareas (PDF, documento, zip).
+    // La imagen sigue en `image` porque se muestra distinto.
+    attachment: {
+        url: { type: String },
+        name: { type: String },
+        mime: { type: String },
+        size: { type: Number }
+    },
     author: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'User', 
@@ -24,5 +43,8 @@ const postSchema = new mongoose.Schema({
         createdAt: { type: Date, default: Date.now }
     }]
 }, { timestamps: true });
+
+// Todos los listados consultan por tablero y ordenan por fecha.
+postSchema.index({ board: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Post', postSchema);
